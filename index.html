@@ -1,0 +1,651 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+    <title>Santana Mango - Flujo de Efectivo</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            font-family: system-ui, 'Segoe UI', 'Roboto', 'Helvetica Neue', sans-serif;
+        }
+        body {
+            background: #eef2f5;
+            margin: 0;
+            padding: 24px 20px;
+        }
+        .app-container {
+            max-width: 1600px;
+            margin: 0 auto;
+        }
+        /* header */
+        .report-header {
+            background: #1e3a5f;
+            color: white;
+            padding: 16px 24px;
+            border-radius: 20px 20px 12px 12px;
+            margin-bottom: 24px;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.05);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+        .report-header h1 {
+            margin: 0;
+            font-size: 1.8rem;
+            font-weight: 600;
+        }
+        .print-btn {
+            background: white;
+            color: #1e3a5f;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 40px;
+            font-weight: bold;
+            cursor: pointer;
+            font-size: 0.9rem;
+            transition: 0.2s;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .print-btn:hover {
+            background: #f0f4f9;
+            transform: scale(0.97);
+        }
+        /* summary cards */
+        .summary-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+            gap: 18px;
+            margin-bottom: 32px;
+        }
+        .card {
+            background: white;
+            border-radius: 24px;
+            padding: 18px 20px;
+            box-shadow: 0 6px 14px rgba(0,0,0,0.03), 0 1px 3px rgba(0,0,0,0.1);
+            border-left: 6px solid;
+        }
+        .card.income { border-left-color: #2b9348; }
+        .card.outcome { border-left-color: #e85d04; }
+        .card.balance { border-left-color: #0077b6; }
+        .card.usd-deposit { border-left-color: #3b82f6; }
+        .card.usd-payment { border-left-color: #f97316; }
+        .card.usd-balance { border-left-color: #0f172a; }
+        .card h3 {
+            margin: 0 0 10px 0;
+            font-size: 0.9rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            font-weight: 600;
+            color: #2c3e4e;
+        }
+        .card .amount {
+            font-size: 2rem;
+            font-weight: 700;
+            color: #0a1c2f;
+            word-break: break-word;
+        }
+        /* sections */
+        .section-card {
+            background: white;
+            border-radius: 24px;
+            margin-bottom: 32px;
+            overflow: hidden;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.05);
+        }
+        .section-title {
+            background: #f8fafc;
+            padding: 16px 24px;
+            border-bottom: 1px solid #e2e8f0;
+            font-weight: 700;
+            font-size: 1.3rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 12px;
+        }
+        .section-title h2 {
+            margin: 0;
+            font-size: 1.3rem;
+        }
+        .btn-add {
+            background: #1e3a5f;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 40px;
+            font-weight: 600;
+            cursor: pointer;
+            font-size: 0.85rem;
+        }
+        .table-wrapper {
+            overflow-x: auto;
+            padding: 0 0 4px 0;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.85rem;
+        }
+        th {
+            background: #f1f5f9;
+            padding: 14px 10px;
+            text-align: left;
+            font-weight: 600;
+            border-bottom: 1px solid #cbd5e1;
+        }
+        td {
+            padding: 12px 10px;
+            border-bottom: 1px solid #e9edf2;
+        }
+        .action-btns button {
+            background: transparent;
+            border: none;
+            cursor: pointer;
+            font-size: 1.2rem;
+            margin: 0 4px;
+        }
+        footer {
+            text-align: center;
+            font-size: 0.75rem;
+            color: #5f6c7a;
+            margin-top: 20px;
+        }
+        /* Modal de selección de impresión */
+        .print-modal {
+            display: none;
+            position: fixed;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            background: rgba(0,0,0,0.5);
+            justify-content: center;
+            align-items: center;
+            z-index: 2000;
+        }
+        .print-modal-content {
+            background: white;
+            max-width: 450px;
+            width: 90%;
+            border-radius: 32px;
+            padding: 28px 24px;
+            box-shadow: 0 20px 35px rgba(0,0,0,0.2);
+        }
+        .print-modal-content h3 {
+            margin-top: 0;
+            color: #1e3a5f;
+        }
+        .print-option {
+            margin: 18px 0;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        .print-option input {
+            width: 18px;
+            height: 18px;
+        }
+        .print-modal-buttons {
+            display: flex;
+            justify-content: flex-end;
+            gap: 12px;
+            margin-top: 24px;
+        }
+        .print-modal-buttons button {
+            padding: 8px 18px;
+            border-radius: 40px;
+            border: none;
+            font-weight: 600;
+            cursor: pointer;
+        }
+        .btn-print-confirm {
+            background: #1e3a5f;
+            color: white;
+        }
+        .btn-print-cancel {
+            background: #e9ecef;
+        }
+        /* Reglas de impresión: ocultar elementos no deseados por defecto */
+        @media print {
+            body {
+                background: white;
+                padding: 0.5cm;
+                margin: 0;
+            }
+            .print-btn, .btn-add, .action-btns, .modal, .btn-edit, .btn-delete, .print-modal, .print-modal-content, footer, .report-header .print-btn {
+                display: none !important;
+            }
+            .card, .section-card {
+                break-inside: avoid;
+                box-shadow: none;
+                border: 1px solid #ccc;
+            }
+            .report-header {
+                background: #1e3a5f;
+                -webkit-print-color-adjust: exact;
+                print-color-adjust: exact;
+            }
+            th {
+                background: #e9ecef;
+                -webkit-print-color-adjust: exact;
+                print-color-adjust: exact;
+            }
+        }
+        /* Clases dinámicas para ocultar secciones en impresión según selección */
+        body.print-only-egresos .summary-grid,
+        body.print-only-egresos .section-card:has(h2:contains("DEPÓSITOS")),
+        body.print-only-egresos .section-card:has(h2:contains("PAGOS EN USD")) {
+            display: none;
+        }
+        /* Mejor usar data attributes con CSS */
+        body.print-egresos .summary-grid,
+        body.print-egresos .depositos-section,
+        body.print-egresos .pagos-section {
+            display: none;
+        }
+        body.print-depositos .summary-grid,
+        body.print-depositos .egresos-section,
+        body.print-depositos .pagos-section {
+            display: none;
+        }
+        body.print-pagos .summary-grid,
+        body.print-pagos .egresos-section,
+        body.print-pagos .depositos-section {
+            display: none;
+        }
+        body.print-todos .summary-grid,
+        body.print-todos .egresos-section,
+        body.print-todos .depositos-section,
+        body.print-todos .pagos-section {
+            display: block;
+        }
+        /* identificadores para las secciones */
+        .egresos-section, .depositos-section, .pagos-section {
+            display: block;
+        }
+    </style>
+</head>
+<body>
+<div class="app-container">
+    <div class="report-header">
+        <div>
+            <h1>📊 Reporte de movimientos (Flujo) | SANTANA MANGO</h1>
+            <p>BBVA / MONEX • Control de egresos MXN • Depósitos USD • Pagos en USD</p>
+        </div>
+        <button class="print-btn" id="showPrintModalBtn">🖨️ Imprimir Reporte</button>
+    </div>
+
+    <!-- Tarjetas de resumen (siempre visibles en pantalla) -->
+    <div class="summary-grid" id="summaryCards"></div>
+
+    <!-- SECCIÓN EGRESOS MXN -->
+    <div class="section-card egresos-section" id="egresosSection">
+        <div class="section-title">
+            <h2>💸 MOVIMIENTOS (EGRESOS MXN)</h2>
+            <button class="btn-add" id="btnAddTransaction">+ Nueva salida</button>
+        </div>
+        <div class="table-wrapper">
+            <table id="transactionsTable">
+                <thead><tr><th>Fecha</th><th>Proveedor</th><th>Concepto</th><th>Departamento</th><th>Método pago</th><th>Importe (MXN)</th><th>Acciones</th></tr></thead>
+                <tbody id="transactionsBody"></tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- Depósitos USD y Pagos USD -->
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 24px;">
+        <div class="section-card depositos-section" id="depositosSection">
+            <div class="section-title">
+                <h2>💰 DEPÓSITOS USD → MXN</h2>
+                <button class="btn-add" id="btnAddDeposit">+ Depósito USD</button>
+            </div>
+            <div class="table-wrapper">
+                <table id="depositsTable">
+                    <thead><tr><th>Fecha</th><th>Concepto</th><th>USD</th><th>T.C.</th><th>Importe MXN</th><th>Acciones</th></tr></thead>
+                    <tbody id="depositsBody"></tbody>
+                </table>
+            </div>
+        </div>
+        <div class="section-card pagos-section" id="pagosSection">
+            <div class="section-title">
+                <h2>💵 PAGOS EN USD</h2>
+                <button class="btn-add" id="btnAddPaymentUSD">+ Pago USD</button>
+            </div>
+            <div class="table-wrapper">
+                <table id="paymentsTable">
+                    <thead><tr><th>Fecha</th><th>Concepto</th><th>Monto USD</th><th>Acciones</th></tr></thead>
+                    <tbody id="paymentsBody"></tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+    <footer>📌 Datos almacenados localmente • Seleccione qué imprimir con el botón superior</footer>
+</div>
+
+<!-- MODAL DE SELECCIÓN DE IMPRESIÓN -->
+<div id="printSelectionModal" class="print-modal">
+    <div class="print-modal-content">
+        <h3>📄 Seleccionar reporte a imprimir</h3>
+        <div class="print-option">
+            <input type="radio" name="printOption" id="printAll" value="todos" checked>
+            <label for="printAll"><strong>Todos</strong> (resumen + egresos + depósitos + pagos USD)</label>
+        </div>
+        <div class="print-option">
+            <input type="radio" name="printOption" id="printEgresos" value="egresos">
+            <label for="printEgresos"><strong>Solo Egresos MXN</strong> (movimientos y resumen relacionado)</label>
+        </div>
+        <div class="print-option">
+            <input type="radio" name="printOption" id="printDepositos" value="depositos">
+            <label for="printDepositos"><strong>Solo Depósitos USD</strong> (tabla de depósitos más resumen)</label>
+        </div>
+        <div class="print-option">
+            <input type="radio" name="printOption" id="printPagos" value="pagos">
+            <label for="printPagos"><strong>Solo Pagos USD</strong> (tabla de pagos en dólares)</label>
+        </div>
+        <div class="print-modal-buttons">
+            <button class="btn-print-cancel" id="cancelPrintModal">Cancelar</button>
+            <button class="btn-print-confirm" id="confirmPrintBtn">Imprimir</button>
+        </div>
+    </div>
+</div>
+
+<!-- MODALES DE EDICIÓN (simplificados pero funcionales) -->
+<div id="modalTransaction" class="modal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.5); justify-content:center; align-items:center; z-index:1000;">
+    <div class="modal-content" style="background:white; max-width:550px; width:90%; border-radius:32px; padding:24px;">
+        <h3 id="modalTransTitle">➕ Nueva salida MXN</h3>
+        <form id="transactionForm">
+            <div class="form-row" style="margin-bottom:12px"><label>Fecha</label><input type="date" id="transDate" required style="width:100%"></div>
+            <div class="form-row" style="margin-bottom:12px"><label>Proveedor</label><input type="text" id="transProvider" required style="width:100%"></div>
+            <div class="form-row" style="margin-bottom:12px"><label>Concepto</label><input type="text" id="transConcept" required style="width:100%"></div>
+            <div class="form-row" style="margin-bottom:12px"><label>Departamento</label><input type="text" id="transDept" required style="width:100%"></div>
+            <div class="form-row" style="margin-bottom:12px"><label>Método pago</label><input type="text" id="transMetPago" value="TRANSFERENCIA" style="width:100%"></div>
+            <div class="form-row" style="margin-bottom:12px"><label>Importe (MXN)</label><input type="number" step="0.01" id="transAmount" required style="width:100%"></div>
+            <div class="modal-buttons" style="display:flex; justify-content:flex-end; gap:10px"><button type="submit" class="btn-submit" style="background:#1e3a5f; color:white; padding:8px 16px; border-radius:30px">Guardar</button><button type="button" class="btn-cancel" style="background:#e9ecef; padding:8px 16px; border-radius:30px">Cancelar</button></div>
+        </form>
+    </div>
+</div>
+<div id="modalDeposit" class="modal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.5); justify-content:center; align-items:center; z-index:1000;">
+    <div class="modal-content" style="background:white; max-width:550px; width:90%; border-radius:32px; padding:24px;"><h3>➕ Nuevo depósito USD</h3>
+    <form id="depositForm"><div style="margin-bottom:12px"><label>Fecha</label><input type="date" id="depositDate" required style="width:100%"></div><div style="margin-bottom:12px"><label>Concepto</label><input type="text" id="depositConcept" required style="width:100%"></div><div style="margin-bottom:12px"><label>Monto USD</label><input type="number" step="0.01" id="depositUSD" required style="width:100%"></div><div style="margin-bottom:12px"><label>Tipo Cambio</label><input type="number" step="0.0001" id="depositTC" required value="20.50" style="width:100%"></div><div style="margin-bottom:12px"><label>Importe MXN</label><input type="text" id="depositMXNResult" readonly style="background:#f1f3f5; width:100%"></div><div class="modal-buttons" style="display:flex; justify-content:flex-end; gap:10px"><button type="submit" class="btn-submit" style="background:#1e3a5f; color:white">Guardar</button><button type="button" class="btn-cancel" style="background:#e9ecef">Cancelar</button></div></form></div>
+</div>
+<div id="modalPayment" class="modal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.5); justify-content:center; align-items:center; z-index:1000;">
+    <div class="modal-content" style="background:white; max-width:550px; width:90%; border-radius:32px; padding:24px;"><h3>➕ Nuevo pago USD</h3>
+    <form id="paymentForm"><div style="margin-bottom:12px"><label>Fecha</label><input type="date" id="paymentDate" required style="width:100%"></div><div style="margin-bottom:12px"><label>Concepto</label><input type="text" id="paymentConcept" required style="width:100%"></div><div style="margin-bottom:12px"><label>Monto USD</label><input type="number" step="0.01" id="paymentAmountUSD" required style="width:100%"></div><div class="modal-buttons" style="display:flex; justify-content:flex-end; gap:10px"><button type="submit" class="btn-submit" style="background:#1e3a5f; color:white">Guardar</button><button type="button" class="btn-cancel" style="background:#e9ecef">Cancelar</button></div></form></div>
+</div>
+
+<script>
+    // ---------- MODELOS Y DATOS ----------
+    let transactions = [];
+    let depositsUSD = [];
+    let paymentsUSD = [];
+    function genId() { return Date.now() + '-' + Math.random().toString(36).substr(2, 6); }
+    function loadData() {
+        const storedTrans = localStorage.getItem('santana_transactions');
+        const storedDep = localStorage.getItem('santana_deposits');
+        const storedPay = localStorage.getItem('santana_payments');
+        if (storedTrans) transactions = JSON.parse(storedTrans);
+        if (storedDep) depositsUSD = JSON.parse(storedDep);
+        if (storedPay) paymentsUSD = JSON.parse(storedPay);
+        if (!transactions.length) seedInitialData();
+    }
+    function saveAll() {
+        localStorage.setItem('santana_transactions', JSON.stringify(transactions));
+        localStorage.setItem('santana_deposits', JSON.stringify(depositsUSD));
+        localStorage.setItem('santana_payments', JSON.stringify(paymentsUSD));
+        renderAll();
+    }
+    function seedInitialData() {
+        transactions = [
+            { id: genId(), date: "2026-01-26", provider: "ALFREDO PADILLA OSUNA", concept: "REPOSICION NOMINA", department: "NOMINA", paymentMethod: "TRANSFERENCIA", amount: 9850 },
+            { id: genId(), date: "2026-01-28", provider: "SAMIRAMIS MARES GALINDO", concept: "PAGO AGR", department: "OPERATIVO", paymentMethod: "TRANSFERENCIA", amount: 6964.76 },
+            { id: genId(), date: "2026-01-29", provider: "BBVA DOLARES", concept: "APERTURA CUENTA DOLARES", department: "ADMINISTRACION", paymentMethod: "TRANSFERENCIA", amount: 1150 },
+            { id: genId(), date: "2026-01-30", provider: "SEDEX", concept: "ALTA EN PLATAFORMA", department: "ADMINISTRACION", paymentMethod: "TRANSFERENCIA", amount: 5500 },
+            { id: genId(), date: "2026-02-02", provider: "ALFREDO PADILLA OSUNA", concept: "REEMBOLSO GASTOS", department: "ADMINISTRACION", paymentMethod: "TRANSFERENCIA", amount: 10000 },
+            { id: genId(), date: "2026-02-06", provider: "BBVA", concept: "COMISIONES", department: "ADMINISTRACION", paymentMethod: "TRANSFERENCIA", amount: 360.89 },
+            { id: genId(), date: "2026-02-13", provider: "ALFREDO PADILLA OSUNA", concept: "NOMINA", department: "NOMINA", paymentMethod: "TRANSFERENCIA", amount: 13000 },
+            { id: genId(), date: "2026-03-07", provider: "ALFREDO PADILLA OSUNA", concept: "ANTICIPO FRUTA", department: "ACOPIO", paymentMethod: "TRANSFERENCIA", amount: 4500 },
+            { id: genId(), date: "2026-03-13", provider: "AARON GARATE RUIZ", concept: "PAGO AGR", department: "ACOPIO", paymentMethod: "TRANSFERENCIA", amount: 100000 },
+            { id: genId(), date: "2026-03-30", provider: "LABORATORIO LAQUIN", concept: "ANALISIS", department: "INOCUIDAD", paymentMethod: "TRANSFERENCIA", amount: 12488.62 }
+        ];
+        depositsUSD = [
+            { id: genId(), date: "2026-01-22", concept: "APERTURA (Capital)", usdAmount: 5000, exchangeRate: 20.45, mxnAmount: 102250 },
+            { id: genId(), date: "2026-01-26", concept: "IQ PRODUCE", usdAmount: 8000, exchangeRate: 20.38, mxnAmount: 163040 },
+            { id: genId(), date: "2026-02-25", concept: "APORTACION", usdAmount: 3000, exchangeRate: 20.20, mxnAmount: 60600 },
+            { id: genId(), date: "2026-03-27", concept: "RP GLOBAL", usdAmount: 7200, exchangeRate: 20.62, mxnAmount: 148464 }
+        ];
+        paymentsUSD = [
+            { id: genId(), date: "2026-02-10", concept: "Comisión Monex", amountUSD: 120 },
+            { id: genId(), date: "2026-02-28", concept: "Proveedor Extranjero", amountUSD: 850 },
+            { id: genId(), date: "2026-03-20", concept: "Servicios USD", amountUSD: 275 }
+        ];
+    }
+    // CRUD
+    function addTransaction(t) { transactions.push(t); saveAll(); }
+    function updateTransaction(id, updated) { const idx = transactions.findIndex(t => t.id === id); if(idx !== -1) { transactions[idx] = {...updated, id}; saveAll(); } }
+    function deleteTransaction(id) { transactions = transactions.filter(t => t.id !== id); saveAll(); }
+    function addDeposit(d) { depositsUSD.push(d); saveAll(); }
+    function updateDeposit(id, updated) { const idx = depositsUSD.findIndex(d => d.id === id); if(idx !== -1) { depositsUSD[idx] = {...updated, id}; saveAll(); } }
+    function deleteDeposit(id) { depositsUSD = depositsUSD.filter(d => d.id !== id); saveAll(); }
+    function addPayment(p) { paymentsUSD.push(p); saveAll(); }
+    function updatePayment(id, updated) { const idx = paymentsUSD.findIndex(p => p.id === id); if(idx !== -1) { paymentsUSD[idx] = {...updated, id}; saveAll(); } }
+    function deletePayment(id) { paymentsUSD = paymentsUSD.filter(p => p.id !== id); saveAll(); }
+    function computeTotals() {
+        const totalOutMXN = transactions.reduce((s, t) => s + t.amount, 0);
+        const totalIncomeMXN = depositsUSD.reduce((s, d) => s + (d.mxnAmount || 0), 0);
+        const balanceMXN = totalIncomeMXN - totalOutMXN;
+        const totalUSDDeposits = depositsUSD.reduce((s, d) => s + (d.usdAmount || 0), 0);
+        const totalUSDPayments = paymentsUSD.reduce((s, p) => s + p.amountUSD, 0);
+        const balanceUSD = totalUSDDeposits - totalUSDPayments;
+        return { totalOutMXN, totalIncomeMXN, balanceMXN, totalUSDDeposits, totalUSDPayments, balanceUSD };
+    }
+    function renderSummary() {
+        const t = computeTotals();
+        document.getElementById('summaryCards').innerHTML = `
+            <div class="card income"><h3>📥 INGRESOS MXN</h3><div class="amount">$${t.totalIncomeMXN.toLocaleString('es-MX', {minimumFractionDigits:2})}</div></div>
+            <div class="card outcome"><h3>📤 TOTAL SALIDAS MXN</h3><div class="amount">$${t.totalOutMXN.toLocaleString('es-MX', {minimumFractionDigits:2})}</div></div>
+            <div class="card balance"><h3>⚖️ SALDO ACTUAL MXN</h3><div class="amount">$${t.balanceMXN.toLocaleString('es-MX', {minimumFractionDigits:2})}</div></div>
+            <div class="card usd-deposit"><h3>💵 TOTAL DEPÓSITOS USD</h3><div class="amount">$${t.totalUSDDeposits.toLocaleString('en-US', {minimumFractionDigits:2})} USD</div></div>
+            <div class="card usd-payment"><h3>💸 TOTAL PAGOS USD</h3><div class="amount">$${t.totalUSDPayments.toLocaleString('en-US', {minimumFractionDigits:2})} USD</div></div>
+            <div class="card usd-balance"><h3>🏦 SALDO MONEX USD</h3><div class="amount">$${t.balanceUSD.toLocaleString('en-US', {minimumFractionDigits:2})} USD</div></div>
+        `;
+    }
+    function renderTransactions() {
+        const tbody = document.getElementById('transactionsBody');
+        tbody.innerHTML = '';
+        transactions.forEach(t => {
+            const row = tbody.insertRow();
+            row.insertCell(0).innerText = new Date(t.date).toLocaleDateString('es-MX');
+            row.insertCell(1).innerText = t.provider;
+            row.insertCell(2).innerText = t.concept;
+            row.insertCell(3).innerText = t.department;
+            row.insertCell(4).innerText = t.paymentMethod;
+            row.insertCell(5).innerText = `$${t.amount.toLocaleString('es-MX', {minimumFractionDigits:2})}`;
+            const cell = row.insertCell(6);
+            cell.className = 'action-btns';
+            cell.innerHTML = `<button class="btn-edit" data-id="${t.id}">✏️</button><button class="btn-delete" data-id="${t.id}">🗑️</button>`;
+        });
+        document.querySelectorAll('#transactionsBody .btn-edit').forEach(btn => btn.addEventListener('click', (e) => openEditTransaction(btn.dataset.id)));
+        document.querySelectorAll('#transactionsBody .btn-delete').forEach(btn => btn.addEventListener('click', (e) => { if(confirm('Eliminar movimiento?')) deleteTransaction(btn.dataset.id); }));
+    }
+    function renderDeposits() {
+        const tbody = document.getElementById('depositsBody');
+        tbody.innerHTML = '';
+        depositsUSD.forEach(d => {
+            const row = tbody.insertRow();
+            row.insertCell(0).innerText = new Date(d.date).toLocaleDateString('es-MX');
+            row.insertCell(1).innerText = d.concept;
+            row.insertCell(2).innerText = d.usdAmount.toFixed(2);
+            row.insertCell(3).innerText = d.exchangeRate.toFixed(4);
+            row.insertCell(4).innerText = `$${d.mxnAmount.toLocaleString('es-MX', {minimumFractionDigits:2})}`;
+            const cell = row.insertCell(5);
+            cell.innerHTML = `<button class="btn-edit" data-id="${d.id}">✏️</button><button class="btn-delete" data-id="${d.id}">🗑️</button>`;
+        });
+        document.querySelectorAll('#depositsBody .btn-edit').forEach(btn => btn.addEventListener('click', (e) => openEditDeposit(btn.dataset.id)));
+        document.querySelectorAll('#depositsBody .btn-delete').forEach(btn => btn.addEventListener('click', (e) => { if(confirm('Eliminar depósito?')) deleteDeposit(btn.dataset.id); }));
+    }
+    function renderPayments() {
+        const tbody = document.getElementById('paymentsBody');
+        tbody.innerHTML = '';
+        paymentsUSD.forEach(p => {
+            const row = tbody.insertRow();
+            row.insertCell(0).innerText = new Date(p.date).toLocaleDateString('es-MX');
+            row.insertCell(1).innerText = p.concept;
+            row.insertCell(2).innerText = `$${p.amountUSD.toFixed(2)} USD`;
+            const cell = row.insertCell(3);
+            cell.innerHTML = `<button class="btn-edit" data-id="${p.id}">✏️</button><button class="btn-delete" data-id="${p.id}">🗑️</button>`;
+        });
+        document.querySelectorAll('#paymentsBody .btn-edit').forEach(btn => btn.addEventListener('click', (e) => openEditPayment(btn.dataset.id)));
+        document.querySelectorAll('#paymentsBody .btn-delete').forEach(btn => btn.addEventListener('click', (e) => { if(confirm('Eliminar pago?')) deletePayment(btn.dataset.id); }));
+    }
+    function renderAll() { renderTransactions(); renderDeposits(); renderPayments(); renderSummary(); }
+    // Lógica de modales de edición (similar a antes)
+    let currentTransId = null, currentDepositId = null, currentPaymentId = null;
+    function openTransactionModal(editMode=false, data=null) {
+        const modal = document.getElementById('modalTransaction');
+        modal.style.display = 'flex';
+        if(editMode && data) {
+            document.getElementById('modalTransTitle').innerText = '✏️ Editar salida';
+            document.getElementById('transDate').value = data.date;
+            document.getElementById('transProvider').value = data.provider;
+            document.getElementById('transConcept').value = data.concept;
+            document.getElementById('transDept').value = data.department;
+            document.getElementById('transMetPago').value = data.paymentMethod;
+            document.getElementById('transAmount').value = data.amount;
+            currentTransId = data.id;
+        } else {
+            document.getElementById('modalTransTitle').innerText = '➕ Nueva salida';
+            document.getElementById('transactionForm').reset();
+            document.getElementById('transDate').value = new Date().toISOString().slice(0,10);
+            currentTransId = null;
+        }
+    }
+    function openEditTransaction(id) { const t = transactions.find(tx => tx.id === id); if(t) openTransactionModal(true, t); }
+    document.getElementById('transactionForm').addEventListener('submit', (e) => {
+        e.preventDefault();
+        const date = document.getElementById('transDate').value, provider = document.getElementById('transProvider').value.trim(), concept = document.getElementById('transConcept').value.trim(), department = document.getElementById('transDept').value.trim(), paymentMethod = document.getElementById('transMetPago').value.trim(), amount = parseFloat(document.getElementById('transAmount').value);
+        if(!date||!provider||!concept||!department||isNaN(amount)) return alert('Complete todos los campos');
+        if(currentTransId) updateTransaction(currentTransId, { date, provider, concept, department, paymentMethod, amount });
+        else addTransaction({ id: genId(), date, provider, concept, department, paymentMethod, amount });
+        document.getElementById('modalTransaction').style.display = 'none';
+    });
+    function updateDepositMXNPreview() { const usd = parseFloat(document.getElementById('depositUSD').value)||0, tc = parseFloat(document.getElementById('depositTC').value)||0; document.getElementById('depositMXNResult').value = (usd*tc).toFixed(2); }
+    document.getElementById('depositUSD')?.addEventListener('input', updateDepositMXNPreview);
+    document.getElementById('depositTC')?.addEventListener('input', updateDepositMXNPreview);
+    function openDepositModal(editMode=false, data=null) {
+        const modal = document.getElementById('modalDeposit');
+        modal.style.display = 'flex';
+        if(editMode && data) {
+            document.getElementById('depositDate').value = data.date;
+            document.getElementById('depositConcept').value = data.concept;
+            document.getElementById('depositUSD').value = data.usdAmount;
+            document.getElementById('depositTC').value = data.exchangeRate;
+            updateDepositMXNPreview();
+            currentDepositId = data.id;
+        } else {
+            document.getElementById('depositForm').reset();
+            document.getElementById('depositDate').value = new Date().toISOString().slice(0,10);
+            document.getElementById('depositTC').value = "20.50";
+            updateDepositMXNPreview();
+            currentDepositId = null;
+        }
+    }
+    function openEditDeposit(id) { const d = depositsUSD.find(dep => dep.id === id); if(d) openDepositModal(true, d); }
+    document.getElementById('depositForm')?.addEventListener('submit', (e) => {
+        e.preventDefault();
+        const date = document.getElementById('depositDate').value, concept = document.getElementById('depositConcept').value.trim(), usdAmount = parseFloat(document.getElementById('depositUSD').value), exchangeRate = parseFloat(document.getElementById('depositTC').value);
+        if(!date||!concept||isNaN(usdAmount)||isNaN(exchangeRate)) return alert('Datos inválidos');
+        const mxnAmount = usdAmount * exchangeRate;
+        if(currentDepositId) updateDeposit(currentDepositId, { date, concept, usdAmount, exchangeRate, mxnAmount });
+        else addDeposit({ id: genId(), date, concept, usdAmount, exchangeRate, mxnAmount });
+        document.getElementById('modalDeposit').style.display = 'none';
+    });
+    function openPaymentModal(editMode=false, data=null) {
+        const modal = document.getElementById('modalPayment');
+        modal.style.display = 'flex';
+        if(editMode && data) {
+            document.getElementById('paymentDate').value = data.date;
+            document.getElementById('paymentConcept').value = data.concept;
+            document.getElementById('paymentAmountUSD').value = data.amountUSD;
+            currentPaymentId = data.id;
+        } else {
+            document.getElementById('paymentForm').reset();
+            document.getElementById('paymentDate').value = new Date().toISOString().slice(0,10);
+            currentPaymentId = null;
+        }
+    }
+    function openEditPayment(id) { const p = paymentsUSD.find(pay => pay.id === id); if(p) openPaymentModal(true, p); }
+    document.getElementById('paymentForm')?.addEventListener('submit', (e) => {
+        e.preventDefault();
+        const date = document.getElementById('paymentDate').value, concept = document.getElementById('paymentConcept').value.trim(), amountUSD = parseFloat(document.getElementById('paymentAmountUSD').value);
+        if(!date||!concept||isNaN(amountUSD)) return alert('Complete campos');
+        if(currentPaymentId) updatePayment(currentPaymentId, { date, concept, amountUSD });
+        else addPayment({ id: genId(), date, concept, amountUSD });
+        document.getElementById('modalPayment').style.display = 'none';
+    });
+    document.querySelectorAll('.btn-cancel').forEach(btn => btn.addEventListener('click', () => {
+        document.getElementById('modalTransaction').style.display = 'none';
+        document.getElementById('modalDeposit').style.display = 'none';
+        document.getElementById('modalPayment').style.display = 'none';
+    }));
+    window.onclick = e => { if(e.target.classList?.contains('modal')) e.target.style.display = 'none'; };
+    document.getElementById('btnAddTransaction').onclick = () => openTransactionModal(false);
+    document.getElementById('btnAddDeposit').onclick = () => openDepositModal(false);
+    document.getElementById('btnAddPaymentUSD').onclick = () => openPaymentModal(false);
+    
+    // ---------- LÓGICA DE IMPRESIÓN CON SELECCIÓN ----------
+    const printModal = document.getElementById('printSelectionModal');
+    const showPrintBtn = document.getElementById('showPrintModalBtn');
+    const cancelPrintBtn = document.getElementById('cancelPrintModal');
+    const confirmPrintBtn = document.getElementById('confirmPrintBtn');
+    
+    showPrintBtn.onclick = () => { printModal.style.display = 'flex'; };
+    cancelPrintBtn.onclick = () => { printModal.style.display = 'none'; };
+    confirmPrintBtn.onclick = () => {
+        const selected = document.querySelector('input[name="printOption"]:checked').value;
+        printModal.style.display = 'none';
+        // Aplicar clase al body para ocultar secciones no deseadas durante la impresión
+        // Guardamos clases previas
+        const body = document.body;
+        // Remover cualquier clase de impresión previa
+        body.classList.remove('print-todos', 'print-egresos', 'print-depositos', 'print-pagos');
+        if (selected === 'todos') {
+            body.classList.add('print-todos');
+        } else if (selected === 'egresos') {
+            body.classList.add('print-egresos');
+        } else if (selected === 'depositos') {
+            body.classList.add('print-depositos');
+        } else if (selected === 'pagos') {
+            body.classList.add('print-pagos');
+        }
+        // Llamar a la impresión nativa
+        window.print();
+        // Después de imprimir (o un breve timeout) restaurar la vista normal.
+        setTimeout(() => {
+            body.classList.remove('print-todos', 'print-egresos', 'print-depositos', 'print-pagos');
+        }, 500);
+    };
+    // Definiendo reglas CSS dinámicas mediante style injection para ocultar secciones según la clase.
+    const styleSheet = document.createElement("style");
+    styleSheet.textContent = `
+        body.print-egresos .depositos-section, body.print-egresos .pagos-section, body.print-egresos .summary-grid { display: none; }
+        body.print-depositos .egresos-section, body.print-depositos .pagos-section, body.print-depositos .summary-grid { display: none; }
+        body.print-pagos .egresos-section, body.print-pagos .depositos-section, body.print-pagos .summary-grid { display: none; }
+        body.print-todos .egresos-section, body.print-todos .depositos-section, body.print-todos .pagos-section, body.print-todos .summary-grid { display: block; }
+        @media print {
+            body.print-egresos .egresos-section, body.print-egresos .summary-grid { display: block !important; }
+            body.print-depositos .depositos-section, body.print-depositos .summary-grid { display: block !important; }
+            body.print-pagos .pagos-section { display: block !important; }
+            body.print-todos .summary-grid, body.print-todos .egresos-section, body.print-todos .depositos-section, body.print-todos .pagos-section { display: block !important; }
+            .print-modal, .btn-add, .action-btns { display: none !important; }
+        }
+    `;
+    document.head.appendChild(styleSheet);
+    
+    loadData();
+    renderAll();
+</script>
+</body>
+</html>
