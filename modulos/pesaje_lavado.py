@@ -1,4 +1,4 @@
-# modulos/pesaje_lavado.py - Báscula ya tarada, edición de observaciones en tandas pendientes
+# modulos/pesaje_lavado.py - Editor de tanda con pestañas (Peso + Jabas)
 import customtkinter as ctk
 from tkinter import ttk, messagebox, filedialog, simpledialog
 from database import ejecutar_consulta
@@ -509,38 +509,140 @@ class VentanaPesajeLavado(ctk.CTkFrame):
                 texto += f" - {p['observaciones']}"
             lbl = ctk.CTkLabel(frame, text=texto, anchor="w")
             lbl.pack(side="left", fill="x", expand=True, padx=5, pady=2)
-            # Botón editar
+            # Botón editar (usará nueva ventana con pestañas)
             btn_edit = ctk.CTkButton(frame, text="✏️", width=30, command=lambda i=idx: self.editar_tanda(i))
             btn_edit.pack(side="right", padx=2)
             # Botón eliminar
             btn_del = ctk.CTkButton(frame, text="✖", width=30, command=lambda i=idx: self.eliminar_tanda_individual(i))
             btn_del.pack(side="right", padx=2)
-            crear_tooltip(btn_edit, "Editar observaciones de esta tanda")
+            crear_tooltip(btn_edit, "Editar tanda (peso, jabas, observaciones)")
             crear_tooltip(btn_del, "Eliminar esta tanda")
 
+    # ========== NUEVO EDITOR DE TANDA CON PESTAÑAS (PESO + JABAS) ==========
     def editar_tanda(self, idx):
-        """Abre ventana para editar observaciones de la tanda seleccionada."""
         if idx < 0 or idx >= len(self.tandas_pendientes):
             return
         tanda = self.tandas_pendientes[idx]
         top = ctk.CTkToplevel(self)
         top.title(f"Editar Tanda {tanda['tanda']}")
-        top.geometry("400x250")
+        top.geometry("550x500")
         top.grab_set()
-        ctk.CTkLabel(top, text="Observaciones:", font=("Arial", 12, "bold")).pack(pady=10)
-        obs_entry = ctk.CTkEntry(top, width=300, placeholder_text="Observaciones")
-        obs_entry.insert(0, tanda["observaciones"])
-        obs_entry.pack(pady=5, padx=20, fill="x")
+        top.resizable(False, False)
+
+        # Variables temporales
+        temp_peso = ctk.DoubleVar(value=tanda['neto'])
+        temp_jabas = ctk.IntVar(value=tanda['jabas'])
+        temp_obs = ctk.StringVar(value=tanda['observaciones'])
+
+        # Repesaje con báscula
+        def repesar():
+            if not self.bascula.conexion or not self.bascula.conexion.is_open:
+                exito, _ = self.bascula.conectar()
+                if not exito:
+                    messagebox.showerror("Error", "No se pudo conectar a la báscula.")
+                    return
+            peso_leido, _ = self.bascula.leer_peso()
+            if peso_leido is None:
+                messagebox.showwarning("Sin lectura", "No se detectó peso en la báscula.")
+                return
+            temp_peso.set(peso_leido)
+            entry_peso.delete(0, "end")
+            entry_peso.insert(0, f"{peso_leido:.2f}")
+            if self.id_recepcion:
+                variedad_temp = self.variedad_actual.lower()
+                peso_neto_por_jaba = 18.0 if "ataulfo" in variedad_temp else 16.0
+                mejor_n = 1
+                menor = float('inf')
+                for n in range(1, 8):
+                    esperado = n * peso_neto_por_jaba
+                    diff = abs(peso_leido - esperado)
+                    if diff < menor:
+                        menor = diff
+                        mejor_n = n
+                temp_jabas.set(mejor_n)
+                for btn in botones_jabas:
+                    if int(btn.cget("text")) == mejor_n:
+                        btn.configure(fg_color="#2e8b57", hover_color="#236b43")
+                    else:
+                        btn.configure(fg_color=("#3a3a3a", "#565656"), hover_color=("#4a4a4a", "#6a6a6a"))
+
+        # Crear Tabview
+        tabview = ctk.CTkTabview(top, width=500, height=380)
+        tabview.pack(padx=20, pady=(20,10), fill="both", expand=True)
+        tab_peso = tabview.add("⚖️ Peso")
+        tab_jabas = tabview.add("📦 Jabas")
+
+        # ========== PESTAÑA PESO ==========
+        frame_peso = ctk.CTkFrame(tab_peso, fg_color="transparent")
+        frame_peso.pack(fill="both", expand=True, padx=20, pady=20)
+
+        ctk.CTkLabel(frame_peso, text="Peso neto (kg):", font=("Arial", 12, "bold")).pack(anchor="w", pady=(0,5))
+        entry_peso = ctk.CTkEntry(frame_peso, width=150, textvariable=temp_peso)
+        entry_peso.pack(anchor="w", pady=5)
+        btn_repesar = ctk.CTkButton(frame_peso, text="🔄 Obtener peso de báscula", command=repesar, width=200)
+        btn_repesar.pack(anchor="w", pady=10)
+
+        ctk.CTkLabel(frame_peso, text="Observaciones:", font=("Arial", 12, "bold")).pack(anchor="w", pady=(15,5))
+        entry_obs = ctk.CTkEntry(frame_peso, width=400, textvariable=temp_obs, placeholder_text="Observaciones")
+        entry_obs.pack(anchor="w", fill="x", pady=5)
+
+        # ========== PESTAÑA JABAS (botones en cuadrícula 2x4) ==========
+        frame_jabas_tab = ctk.CTkFrame(tab_jabas, fg_color="transparent")
+        frame_jabas_tab.pack(fill="both", expand=True, padx=20, pady=20)
+
+        ctk.CTkLabel(frame_jabas_tab, text="Número de jabas:", font=("Arial", 12, "bold")).pack(anchor="w", pady=(0,10))
+
+        grid_frame = ctk.CTkFrame(frame_jabas_tab, fg_color="transparent")
+        grid_frame.pack(anchor="center", pady=10)
+
+        botones_jabas = []
+        def seleccionar_jabas_btn(valor):
+            temp_jabas.set(valor)
+            for btn in botones_jabas:
+                if int(btn.cget("text")) == valor:
+                    btn.configure(fg_color="#2e8b57", hover_color="#236b43")
+                else:
+                    btn.configure(fg_color=("#3a3a3a", "#565656"), hover_color=("#4a4a4a", "#6a6a6a"))
+
+        for i in range(1, 8):
+            btn = ctk.CTkButton(grid_frame, text=str(i), width=70, height=70, font=("Arial", 18, "bold"),
+                                command=lambda v=i: seleccionar_jabas_btn(v))
+            fila = 0 if i <= 4 else 1
+            col = (i-1) % 4
+            btn.grid(row=fila, column=col, padx=5, pady=5)
+            botones_jabas.append(btn)
+        # Inicializar resaltado
+        seleccionar_jabas_btn(temp_jabas.get())
+        # Sincronizar cuando temp_jabas cambie por repesaje
+        def on_temp_jabas_change(*args):
+            seleccionar_jabas_btn(temp_jabas.get())
+        temp_jabas.trace_add("write", on_temp_jabas_change)
+
+        # ========== BOTONES GUARDAR Y CANCELAR ==========
+        btn_frame = ctk.CTkFrame(top, fg_color="transparent")
+        btn_frame.pack(pady=15, fill="x")
+        btn_guardar = ctk.CTkButton(btn_frame, text="Guardar cambios", command=lambda: guardar_edicion(), fg_color="#2e8b57", width=120)
+        btn_guardar.pack(side="right", padx=10)
+        btn_cancelar = ctk.CTkButton(btn_frame, text="Cancelar", command=top.destroy, fg_color="#8b0000", width=100)
+        btn_cancelar.pack(side="right", padx=10)
+
         def guardar_edicion():
-            nueva_obs = obs_entry.get().strip()
+            try:
+                nuevo_peso = temp_peso.get()
+                if nuevo_peso < 0:
+                    raise ValueError
+            except:
+                messagebox.showerror("Error", "Peso inválido.")
+                return
+            nuevas_jabas = temp_jabas.get()
+            nueva_obs = temp_obs.get().strip()
+            self.tandas_pendientes[idx]["neto"] = nuevo_peso
+            self.tandas_pendientes[idx]["jabas"] = nuevas_jabas
             self.tandas_pendientes[idx]["observaciones"] = nueva_obs
             self.actualizar_lista_tandas()
+            self.actualizar_totales()
             top.destroy()
-            messagebox.showinfo("Editado", "Observaciones actualizadas.")
-        btn_guardar = ctk.CTkButton(top, text="Guardar cambios", command=guardar_edicion, fg_color="#2e8b57")
-        btn_guardar.pack(pady=20)
-        btn_cancelar = ctk.CTkButton(top, text="Cancelar", command=top.destroy, fg_color="#8b0000")
-        btn_cancelar.pack(pady=5)
+            messagebox.showinfo("Editado", "Tanda actualizada correctamente.")
 
     def eliminar_tanda_individual(self, idx):
         del self.tandas_pendientes[idx]

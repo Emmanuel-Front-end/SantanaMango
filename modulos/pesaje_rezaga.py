@@ -1,4 +1,4 @@
-# modulos/pesaje_rezaga.py - Diseño de tres columnas + edición con pestañas (sin navegación)
+# modulos/pesaje_rezaga.py - Diseño de tres columnas + edición con pestañas (Jabas en botones 2x4)
 import customtkinter as ctk
 from tkinter import ttk, messagebox, filedialog, simpledialog
 from database import ejecutar_consulta
@@ -576,11 +576,11 @@ class VentanaPesajeRezaga(ctk.CTkFrame):
                         menor = diff
                         mejor_n = n
                 temp_jabas.set(mejor_n)
-                for rb in radio_jabas:
-                    if int(rb.cget("text")) == mejor_n:
-                        rb.select()
+                for btn in botones_jabas:
+                    if int(btn.cget("text")) == mejor_n:
+                        btn.configure(fg_color="#2e8b57", hover_color="#236b43")
                     else:
-                        rb.deselect()
+                        btn.configure(fg_color=("#3a3a3a", "#565656"), hover_color=("#4a4a4a", "#6a6a6a"))
 
         # Seleccionar daños
         def seleccionar_danos_edit():
@@ -646,20 +646,37 @@ class VentanaPesajeRezaga(ctk.CTkFrame):
         entry_obs = ctk.CTkEntry(frame_peso, width=400, textvariable=temp_obs, placeholder_text="Observaciones")
         entry_obs.pack(anchor="w", fill="x", pady=5)
 
-        # ========== PESTAÑA JABAS (radio buttons horizontales) ==========
+        # ========== PESTAÑA JABAS (botones en cuadrícula 2x4) ==========
         frame_jabas_tab = ctk.CTkFrame(tab_jabas, fg_color="transparent")
         frame_jabas_tab.pack(fill="both", expand=True, padx=20, pady=20)
 
         ctk.CTkLabel(frame_jabas_tab, text="Número de jabas:", font=("Arial", 12, "bold")).pack(anchor="w", pady=(0,10))
-        jabas_radio_frame = ctk.CTkFrame(frame_jabas_tab, fg_color="transparent")
-        jabas_radio_frame.pack(anchor="w", pady=5, fill="x")
-        radio_jabas = []
+
+        grid_frame = ctk.CTkFrame(frame_jabas_tab, fg_color="transparent")
+        grid_frame.pack(anchor="center", pady=10)
+
+        botones_jabas = []
+        def seleccionar_jabas_btn(valor):
+            temp_jabas.set(valor)
+            for btn in botones_jabas:
+                if int(btn.cget("text")) == valor:
+                    btn.configure(fg_color="#2e8b57", hover_color="#236b43")
+                else:
+                    btn.configure(fg_color=("#3a3a3a", "#565656"), hover_color=("#4a4a4a", "#6a6a6a"))
+
         for i in range(1, 8):
-            rb = ctk.CTkRadioButton(jabas_radio_frame, text=str(i), variable=temp_jabas, value=i)
-            rb.pack(side="left", padx=5, expand=True)
-            radio_jabas.append(rb)
-        if tanda['jabas'] in range(1,8):
-            radio_jabas[tanda['jabas']-1].select()
+            btn = ctk.CTkButton(grid_frame, text=str(i), width=70, height=70, font=("Arial", 18, "bold"),
+                                command=lambda v=i: seleccionar_jabas_btn(v))
+            fila = 0 if i <= 4 else 1
+            col = (i-1) % 4
+            btn.grid(row=fila, column=col, padx=5, pady=5)
+            botones_jabas.append(btn)
+        # Inicializar resaltado
+        seleccionar_jabas_btn(temp_jabas.get())
+        # Sincronizar cuando temp_jabas cambie por repesaje
+        def on_temp_jabas_change(*args):
+            seleccionar_jabas_btn(temp_jabas.get())
+        temp_jabas.trace_add("write", on_temp_jabas_change)
 
         # ========== PESTAÑA DAÑOS ==========
         frame_danos_tab = ctk.CTkFrame(tab_danos, fg_color="transparent")
