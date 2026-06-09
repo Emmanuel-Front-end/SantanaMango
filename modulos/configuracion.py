@@ -1,13 +1,15 @@
-# modulos/configuracion.py - Gestión de usuarios y permisos (con tooltips)
+# modulos/configuracion.py - Gestión de usuarios y permisos (con contraseñas visibles)
 import customtkinter as ctk
 from tkinter import ttk, messagebox, filedialog
 from database import ejecutar_consulta
 from config import cargar_config, guardar_config, eliminar_config
-from auth import tiene_permiso, cargar_permisos_usuario
+from auth import tiene_permiso, cargar_permisos_usuario, cifrar_contrasena, descifrar_contrasena
 import subprocess
 import sys
 import hashlib
 import json
+import random
+import string
 from datetime import datetime
 from tkcalendar import DateEntry
 from utils.tooltip import crear_tooltip
@@ -20,18 +22,23 @@ class VentanaConfiguracion(ctk.CTkFrame):
         self.on_regresar = on_regresar
         self.usuario_seleccionado_id = None
 
-        # Verificar permiso de acceso
+        # Obtener rol del usuario actual (para restringir visualización de contraseñas)
+        try:
+            from auth import cargar_sesion
+            self.rol_actual = cargar_sesion()[1]
+        except:
+            self.rol_actual = "operador"
+
         if not tiene_permiso(permisos, "configuracion", "leer"):
             ctk.CTkLabel(self, text="⚠️ No tiene permisos para acceder a Configuración",
                         font=("Arial", 20), text_color="red").pack(expand=True)
             return
 
-        # Configurar grid principal
-        self.grid_rowconfigure(0, weight=0)  # barra navegación
-        self.grid_rowconfigure(1, weight=1)  # contenido
+        self.grid_rowconfigure(0, weight=0)
+        self.grid_rowconfigure(1, weight=1)
         self.grid_columnconfigure(0, weight=1)
 
-        # ========== BARRA DE NAVEGACIÓN CON REGRESO ==========
+        # Barra de navegación
         nav_bar = ctk.CTkFrame(self, height=50, corner_radius=0, fg_color=("#e0e0e0", "#2a2a2a"))
         nav_bar.grid(row=0, column=0, sticky="ew")
         nav_bar.grid_columnconfigure(1, weight=1)
@@ -44,13 +51,11 @@ class VentanaConfiguracion(ctk.CTkFrame):
         ctk.CTkLabel(nav_bar, text="⚙️ CONFIGURACIÓN DEL SISTEMA", font=("Arial", 20, "bold"),
                      text_color="#2e8b57").grid(row=0, column=1)
 
-        # Contenedor scrolleable
         self.scroll_frame = ctk.CTkScrollableFrame(self, fg_color="transparent")
         self.scroll_frame.grid(row=1, column=0, sticky="nsew", padx=20, pady=10)
 
         ctk.CTkLabel(self.scroll_frame, text="Configuración del Sistema", font=("Arial", 24, "bold")).pack(pady=10)
 
-        # Pestañas
         self.tabview = ctk.CTkTabview(self.scroll_frame, corner_radius=15)
         self.tabview.pack(fill="both", expand=True, padx=20, pady=10)
 
@@ -99,15 +104,12 @@ class VentanaConfiguracion(ctk.CTkFrame):
 
         btn_frame = ctk.CTkFrame(frame, fg_color="transparent")
         btn_frame.pack(pady=20)
-
         btn_probar = ctk.CTkButton(btn_frame, text="Probar conexión", command=self._probar_conexion)
         btn_probar.pack(side="left", padx=5)
         crear_tooltip(btn_probar, "Verificar si la configuración actual permite conectar a la base de datos")
-
         btn_guardar = ctk.CTkButton(btn_frame, text="Guardar configuración", command=self._guardar_config_red, fg_color="#2e8b57")
         btn_guardar.pack(side="left", padx=5)
         crear_tooltip(btn_guardar, "Guardar la configuración de red (requiere reinicio)")
-
         btn_resetear = ctk.CTkButton(btn_frame, text="Resetear configuración", command=self._resetear_config, fg_color="#8b0000")
         btn_resetear.pack(side="left", padx=5)
         crear_tooltip(btn_resetear, "Eliminar la configuración de red guardada")
@@ -140,7 +142,7 @@ class VentanaConfiguracion(ctk.CTkFrame):
             subprocess.Popen([sys.executable, __file__])
             sys.exit(0)
 
-    # ---------- USUARIOS Y PERMISOS ----------
+    # ---------- USUARIOS Y PERMISOS (CONTRASEÑAS VISIBLES) ----------
     def _init_usuarios(self):
         frame = self.tab_usuarios
         ctk.CTkLabel(frame, text="Gestión de Usuarios", font=("Arial", 16, "bold")).pack(anchor="w", pady=10)
@@ -159,13 +161,16 @@ class VentanaConfiguracion(ctk.CTkFrame):
         btn_eliminar.pack(side="left", padx=5)
         crear_tooltip(btn_eliminar, "Eliminar el usuario seleccionado")
 
-        self.tree_usuarios = ttk.Treeview(frame, columns=("ID", "Usuario", "Rol", "Activo"), show="headings", height=15)
+        # Tabla de usuarios con columna "Contraseña" (solo visible para admin)
+        self.tree_usuarios = ttk.Treeview(frame, columns=("ID", "Usuario", "Rol", "Activo", "Contraseña"), show="headings", height=15)
         self.tree_usuarios.heading("ID", text="ID")
         self.tree_usuarios.heading("Usuario", text="Usuario")
         self.tree_usuarios.heading("Rol", text="Rol")
         self.tree_usuarios.heading("Activo", text="Activo")
+        self.tree_usuarios.heading("Contraseña", text="Contraseña")
+        self.tree_usuarios.column("Contraseña", width=120, anchor="center")
         self.tree_usuarios.pack(fill="both", expand=True, pady=10)
-        crear_tooltip(self.tree_usuarios, "Lista de usuarios del sistema")
+        crear_tooltip(self.tree_usuarios, "Lista de usuarios del sistema. Solo el administrador ve la contraseña real.")
         self.cargar_usuarios()
 
         ctk.CTkLabel(frame, text="Permisos del usuario seleccionado", font=("Arial", 14, "bold")).pack(anchor="w", pady=(10,5))
@@ -179,10 +184,19 @@ class VentanaConfiguracion(ctk.CTkFrame):
     def cargar_usuarios(self):
         for row in self.tree_usuarios.get_children():
             self.tree_usuarios.delete(row)
-        usuarios = ejecutar_consulta("SELECT id, nombre_usuario, rol, activo FROM usuarios", fetchall=True)
+        usuarios = ejecutar_consulta("SELECT id, nombre_usuario, rol, activo, contrasena_cifrada FROM usuarios", fetchall=True)
         for u in usuarios:
             activo = "Sí" if u[3] else "No"
-            self.tree_usuarios.insert("", "end", values=(u[0], u[1], u[2], activo))
+            # Mostrar la contraseña descifrada solo si el usuario actual es admin
+            if self.rol_actual == "admin":
+                pass_real = descifrar_contrasena(u[4])
+                self.tree_usuarios.insert("", "end", values=(u[0], u[1], u[2], activo, pass_real))
+            else:
+                # Para no administradores, ocultamos la columna o mostramos puntos
+                self.tree_usuarios.insert("", "end", values=(u[0], u[1], u[2], activo, "●●●●"))
+        # Si no es admin, ocultar la columna de contraseña (opcional)
+        if self.rol_actual != "admin":
+            self.tree_usuarios.column("Contraseña", width=0, stretch=False)
 
     def on_select_usuario(self, event):
         sel = self.tree_usuarios.selection()
@@ -238,11 +252,17 @@ class VentanaConfiguracion(ctk.CTkFrame):
             for row in self.tree_permisos.get_children():
                 self.tree_permisos.delete(row)
 
+    # ----- Generador de contraseña aleatoria -----
+    def _generar_contraseña_aleatoria(self, longitud=10):
+        caracteres = string.ascii_letters + string.digits + "!@#$%^&*"
+        password = ''.join(random.choice(caracteres) for _ in range(longitud))
+        return password
+
     # -------------------- FORMULARIO DE USUARIO CON PERMISOS --------------------
     def _formulario_usuario(self, id_usuario=None, nombre="", rol="operador", activo=True):
         top = ctk.CTkToplevel(self)
         top.title("Nuevo Usuario" if not id_usuario else "Editar Usuario")
-        top.geometry("850x750")
+        top.geometry("880x750")
         top.grab_set()
 
         wizard_frame = ctk.CTkFrame(top, fg_color="transparent")
@@ -262,20 +282,50 @@ class VentanaConfiguracion(ctk.CTkFrame):
         entry_nombre.grid(row=0, column=1, padx=10, pady=10)
         crear_tooltip(entry_nombre, "Nombre único de usuario para iniciar sesión")
 
+        # Campo contraseña
         ctk.CTkLabel(form_frame, text="Contraseña:", font=("Arial", 14)).grid(row=1, column=0, padx=10, pady=10, sticky="e")
         entry_pass = ctk.CTkEntry(form_frame, width=300, show="•")
         entry_pass.grid(row=1, column=1, padx=10, pady=10)
-        crear_tooltip(entry_pass, "Contraseña del usuario (mínimo 6 caracteres, incluir mayúsculas, números y símbolos para mayor seguridad)")
+        crear_tooltip(entry_pass, "Contraseña del usuario. Si está editando y deja vacío, se conserva la anterior.")
+
+        # Botón generar
+        def generar_aleatoria():
+            nueva = self._generar_contraseña_aleatoria()
+            entry_pass.delete(0, "end")
+            entry_pass.insert(0, nueva)
+            messagebox.showinfo("Contraseña generada", f"Se ha generado la contraseña: {nueva}\nGuárdela en un lugar seguro.")
+        btn_generar = ctk.CTkButton(form_frame, text="🔑 Generar", command=generar_aleatoria, width=100)
+        btn_generar.grid(row=1, column=2, padx=5, pady=10)
+        crear_tooltip(btn_generar, "Generar una contraseña aleatoria segura")
+
+        # Checkbox mostrar
+        mostrar_pass_var = ctk.BooleanVar(value=False)
+        def toggle_mostrar():
+            if mostrar_pass_var.get():
+                entry_pass.configure(show="")
+            else:
+                entry_pass.configure(show="•")
+        cb_mostrar = ctk.CTkCheckBox(form_frame, text="Mostrar", variable=mostrar_pass_var, command=toggle_mostrar)
+        cb_mostrar.grid(row=1, column=3, padx=5, pady=10)
 
         ctk.CTkLabel(form_frame, text="Confirmar:", font=("Arial", 14)).grid(row=2, column=0, padx=10, pady=10, sticky="e")
         entry_confirm = ctk.CTkEntry(form_frame, width=300, show="•")
         entry_confirm.grid(row=2, column=1, padx=10, pady=10)
         crear_tooltip(entry_confirm, "Vuelva a escribir la contraseña para confirmar")
 
+        mostrar_confirm_var = ctk.BooleanVar(value=False)
+        def toggle_mostrar_confirm():
+            if mostrar_confirm_var.get():
+                entry_confirm.configure(show="")
+            else:
+                entry_confirm.configure(show="•")
+        cb_mostrar_confirm = ctk.CTkCheckBox(form_frame, text="Mostrar", variable=mostrar_confirm_var, command=toggle_mostrar_confirm)
+        cb_mostrar_confirm.grid(row=2, column=3, padx=5, pady=10)
+
         self.pass_strength_label = ctk.CTkLabel(form_frame, text="", font=("Arial", 10))
-        self.pass_strength_label.grid(row=1, column=2, padx=10, pady=10, sticky="w")
+        self.pass_strength_label.grid(row=1, column=4, padx=10, pady=10, sticky="w")
         self.pass_match_label = ctk.CTkLabel(form_frame, text="", font=("Arial", 10))
-        self.pass_match_label.grid(row=2, column=2, padx=10, pady=10, sticky="w")
+        self.pass_match_label.grid(row=2, column=4, padx=10, pady=10, sticky="w")
 
         def check_password_strength(event=None):
             pwd = entry_pass.get()
@@ -320,11 +370,10 @@ class VentanaConfiguracion(ctk.CTkFrame):
         cb_activo.grid(row=4, column=1, padx=10, pady=10, sticky="w")
         crear_tooltip(cb_activo, "Si está activo, el usuario podrá iniciar sesión")
 
-        # Paso 2: Selección de permisos
+        # Paso 2: Selección de permisos (igual que antes)
         step2_frame = ctk.CTkFrame(wizard_frame, fg_color="transparent")
         step3_frame = ctk.CTkFrame(wizard_frame, fg_color="transparent")
 
-        # Obtener lista de módulos
         modulos_list = ejecutar_consulta("SELECT id, nombre_modulo FROM modulos_sistema ORDER BY orden", fetchall=True)
         permisos_vars = {}
         rows = {}
@@ -355,7 +404,7 @@ class VentanaConfiguracion(ctk.CTkFrame):
 
             btn_default = ctk.CTkButton(btn_frame, text="Permisos por defecto según rol", command=lambda: default_permissions(), width=200)
             btn_default.pack(side="left", padx=5)
-            crear_tooltip(btn_default, "Asignar permisos típicos según el rol seleccionado (admin: todos, supervisor: lecto-escritura, operador: solo lectura en módulos básicos)")
+            crear_tooltip(btn_default, "Asignar permisos típicos según el rol seleccionado")
 
             btn_copy = ctk.CTkButton(btn_frame, text="📋 Copiar permisos de...", command=lambda: copy_from_user(), width=180)
             btn_copy.pack(side="left", padx=5)
@@ -421,15 +470,12 @@ class VentanaConfiguracion(ctk.CTkFrame):
                         row_frame.pack(fill="x", pady=2)
                     else:
                         row_frame.pack_forget()
-
             def select_all():
                 for _, (_, l, c, e, d) in rows.items():
                     l.set(True); c.set(True); e.set(True); d.set(True)
-
             def clear_all():
                 for _, (_, l, c, e, d) in rows.items():
                     l.set(False); c.set(False); e.set(False); d.set(False)
-
             def default_permissions():
                 rol_actual = combo_rol.get()
                 if rol_actual == "admin":
@@ -437,7 +483,7 @@ class VentanaConfiguracion(ctk.CTkFrame):
                 elif rol_actual == "supervisor":
                     for _, (_, l, c, e, d) in rows.items():
                         l.set(True); c.set(True); e.set(False); d.set(False)
-                else:  # operador
+                else:
                     lectura_modulos = ["catalogos", "recepcion", "pesaje_lavado", "pesaje_rezaga", "etiquetas", "reportes"]
                     for nombre_mod, (_, l, c, e, d) in rows.items():
                         if any(m in nombre_mod.lower() for m in lectura_modulos):
@@ -445,7 +491,6 @@ class VentanaConfiguracion(ctk.CTkFrame):
                         else:
                             l.set(False)
                         c.set(False); e.set(False); d.set(False)
-
             def copy_from_user():
                 usuarios = ejecutar_consulta("SELECT id, nombre_usuario FROM usuarios WHERE id != %s ORDER BY nombre_usuario" % (id_usuario if id_usuario else 0), fetchall=True)
                 if not usuarios:
@@ -458,7 +503,6 @@ class VentanaConfiguracion(ctk.CTkFrame):
                 ctk.CTkLabel(top_copy, text="Seleccionar usuario:").pack(pady=10)
                 combo = ttk.Combobox(top_copy, values=[f"{u[1]}" for u in usuarios], width=30)
                 combo.pack(pady=10)
-                crear_tooltip(combo, "Usuario del cual se copiarán los permisos")
                 def aplicar():
                     selected = combo.get()
                     if not selected: return
@@ -479,7 +523,6 @@ class VentanaConfiguracion(ctk.CTkFrame):
                     messagebox.showinfo("Copiado", f"Permisos copiados desde {selected}")
                 btn_copiar = ctk.CTkButton(top_copy, text="Copiar", command=aplicar)
                 btn_copiar.pack(pady=10)
-                crear_tooltip(btn_copiar, "Copiar los permisos del usuario seleccionado")
 
             search_entry.bind("<KeyRelease>", filter_modules)
             filter_modules()
@@ -500,7 +543,6 @@ class VentanaConfiguracion(ctk.CTkFrame):
                 texto = f"{nombre_modulo}: Leer={l.get()} Crear={c.get()} Editar={e.get()} Eliminar={d.get()}"
                 ctk.CTkLabel(scroll_res, text=texto, anchor="w").pack(fill="x", pady=2)
 
-        # Navegación
         current_step = 1
         def show_step(step):
             nonlocal current_step
@@ -532,7 +574,7 @@ class VentanaConfiguracion(ctk.CTkFrame):
             if not id_usuario and not pwd:
                 messagebox.showerror("Error", "Contraseña requerida")
                 return
-            if pwd != entry_confirm.get():
+            if pwd and pwd != entry_confirm.get():
                 messagebox.showerror("Error", "Las contraseñas no coinciden")
                 return
             self._guardar_usuario(id_usuario, entry_nombre, entry_pass, combo_rol, activo_var, permisos_vars, top)
@@ -543,11 +585,8 @@ class VentanaConfiguracion(ctk.CTkFrame):
         nav_frame.pack(side="bottom", fill="x", pady=20)
         btn_prev = ctk.CTkButton(nav_frame, text="← Anterior", command=lambda: show_step(current_step-1), state="disabled", width=100)
         btn_prev.pack(side="left", padx=20)
-        crear_tooltip(btn_prev, "Ir al paso anterior")
-
         btn_next = ctk.CTkButton(nav_frame, text="Siguiente →", command=lambda: show_step(current_step+1), width=100)
         btn_next.pack(side="right", padx=20)
-        crear_tooltip(btn_next, "Ir al siguiente paso (o guardar en el último)")
 
         show_step(1)
 
@@ -558,20 +597,28 @@ class VentanaConfiguracion(ctk.CTkFrame):
         rol = combo_rol.get()
         activo = activo_var.get()
 
+        contrasena_cifrada = cifrar_contrasena(pwd) if pwd else None
+
         if id_usuario:
             if hash_pass:
-                ejecutar_consulta("UPDATE usuarios SET nombre_usuario=%s, contrasena_hash=%s, rol=%s, activo=%s WHERE id=%s",
-                                  (nom, hash_pass, rol, activo, id_usuario))
+                ejecutar_consulta("""
+                    UPDATE usuarios 
+                    SET nombre_usuario=%s, contrasena_hash=%s, contrasena_cifrada=%s, rol=%s, activo=%s 
+                    WHERE id=%s
+                """, (nom, hash_pass, contrasena_cifrada, rol, activo, id_usuario))
             else:
+                # No cambiar contraseña
                 ejecutar_consulta("UPDATE usuarios SET nombre_usuario=%s, rol=%s, activo=%s WHERE id=%s",
                                   (nom, rol, activo, id_usuario))
             usuario_id = id_usuario
         else:
-            ejecutar_consulta("INSERT INTO usuarios (nombre_usuario, contrasena_hash, rol, activo) VALUES (%s,%s,%s,%s)",
-                              (nom, hash_pass, rol, activo))
+            ejecutar_consulta("""
+                INSERT INTO usuarios (nombre_usuario, contrasena_hash, contrasena_cifrada, rol, activo) 
+                VALUES (%s,%s,%s,%s,%s)
+            """, (nom, hash_pass, contrasena_cifrada, rol, activo))
             usuario_id = ejecutar_consulta("SELECT lastval()", fetchone=True)[0]
 
-        # Eliminar permisos existentes y volver a insertar
+        # Permisos
         ejecutar_consulta("DELETE FROM permisos_usuario WHERE usuario_id = %s", (usuario_id,))
         for modulo_id, (l, c, e, d) in permisos_vars.items():
             ejecutar_consulta("""
@@ -588,14 +635,10 @@ class VentanaConfiguracion(ctk.CTkFrame):
         frame = self.tab_apariencia
         ctk.CTkLabel(frame, text="Tema de la aplicación", font=("Arial", 16, "bold")).pack(anchor="w", pady=10)
         self.tema_var = ctk.StringVar(value=ctk.get_appearance_mode().lower())
-
         rb_claro = ctk.CTkRadioButton(frame, text="Claro", variable=self.tema_var, value="light", command=self._cambiar_tema)
         rb_claro.pack(anchor="w", padx=20, pady=5)
-        crear_tooltip(rb_claro, "Cambiar la interfaz a tema claro")
-
         rb_oscuro = ctk.CTkRadioButton(frame, text="Oscuro", variable=self.tema_var, value="dark", command=self._cambiar_tema)
         rb_oscuro.pack(anchor="w", padx=20, pady=5)
-        crear_tooltip(rb_oscuro, "Cambiar la interfaz a tema oscuro")
 
     def _cambiar_tema(self):
         ctk.set_appearance_mode(self.tema_var.get())
@@ -609,8 +652,6 @@ class VentanaConfiguracion(ctk.CTkFrame):
         ctk.CTkLabel(frame, text="Puerto serie:").pack(anchor="w", padx=20)
         self.puerto_bascula = ctk.CTkEntry(frame, width=150)
         self.puerto_bascula.pack(anchor="w", padx=20, pady=5)
-        crear_tooltip(self.puerto_bascula, "Nombre del puerto COM (ej: COM3)")
-
         try:
             from utils.bascula import Bascula
             bascula = Bascula()
@@ -619,14 +660,10 @@ class VentanaConfiguracion(ctk.CTkFrame):
                 self.puerto_combo = ctk.CTkComboBox(frame, values=puertos, width=150)
                 self.puerto_combo.pack(anchor="w", padx=20, pady=5)
                 self.puerto_combo.set(puertos[0] if puertos else "")
-                crear_tooltip(self.puerto_combo, "Seleccione el puerto serie donde está conectada la báscula")
         except:
             pass
-
         btn_guardar_bascula = ctk.CTkButton(frame, text="Guardar configuración", command=self._guardar_puerto_bascula)
         btn_guardar_bascula.pack(pady=5)
-        crear_tooltip(btn_guardar_bascula, "Guardar el puerto serie seleccionado para la báscula")
-
         ctk.CTkLabel(frame, text="Ajustes de fecha y hora", font=("Arial", 14, "bold")).pack(anchor="w", pady=(20,10))
         frame_fecha = ctk.CTkFrame(frame, fg_color="transparent")
         frame_fecha.pack(fill="x", padx=20, pady=5)
@@ -635,8 +672,6 @@ class VentanaConfiguracion(ctk.CTkFrame):
         self.fecha_actual_label.pack(side="left", padx=5)
         btn_cambiar_fecha = ctk.CTkButton(frame_fecha, text="📅 Cambiar fecha", command=self._cambiar_fecha)
         btn_cambiar_fecha.pack(side="left", padx=10)
-        crear_tooltip(btn_cambiar_fecha, "Cambiar la fecha del sistema (requiere permisos de administrador)")
-
         frame_hora = ctk.CTkFrame(frame, fg_color="transparent")
         frame_hora.pack(fill="x", padx=20, pady=5)
         ctk.CTkLabel(frame_hora, text="Hora actual:").pack(side="left", padx=5)
@@ -644,8 +679,6 @@ class VentanaConfiguracion(ctk.CTkFrame):
         self.hora_actual_label.pack(side="left", padx=5)
         btn_cambiar_hora = ctk.CTkButton(frame_hora, text="⏰ Cambiar hora", command=self._cambiar_hora)
         btn_cambiar_hora.pack(side="left", padx=10)
-        crear_tooltip(btn_cambiar_hora, "Cambiar la hora del sistema (requiere permisos de administrador)")
-
         self._actualizar_fecha_hora()
 
     def _actualizar_fecha_hora(self):
@@ -662,7 +695,6 @@ class VentanaConfiguracion(ctk.CTkFrame):
         ctk.CTkLabel(top, text="Seleccione nueva fecha:").pack(pady=10)
         cal = DateEntry(top, width=12, background='darkblue', foreground='white', borderwidth=2, date_pattern='yyyy-mm-dd')
         cal.pack(pady=10)
-        crear_tooltip(cal, "Seleccione la nueva fecha")
         def aplicar():
             nueva_fecha = cal.get_date()
             try:
@@ -674,7 +706,6 @@ class VentanaConfiguracion(ctk.CTkFrame):
                 messagebox.showerror("Error", f"No se pudo cambiar la fecha: {e}")
         btn_aplicar = ctk.CTkButton(top, text="Aplicar", command=aplicar)
         btn_aplicar.pack(pady=10)
-        crear_tooltip(btn_aplicar, "Aplicar el cambio de fecha")
 
     def _cambiar_hora(self):
         top = ctk.CTkToplevel(self)
@@ -685,7 +716,6 @@ class VentanaConfiguracion(ctk.CTkFrame):
         hora_entry = ctk.CTkEntry(top, width=100)
         hora_entry.pack(pady=5)
         hora_entry.insert(0, datetime.now().strftime("%H:%M:%S"))
-        crear_tooltip(hora_entry, "Ingrese la nueva hora en formato HH:MM:SS")
         def aplicar():
             nueva_hora = hora_entry.get()
             try:
@@ -700,7 +730,6 @@ class VentanaConfiguracion(ctk.CTkFrame):
                 messagebox.showerror("Error", f"No se pudo cambiar la hora: {e}")
         btn_aplicar = ctk.CTkButton(top, text="Aplicar", command=aplicar)
         btn_aplicar.pack(pady=10)
-        crear_tooltip(btn_aplicar, "Aplicar el cambio de hora")
 
     def _guardar_puerto_bascula(self):
         puerto = self.puerto_combo.get() if hasattr(self, 'puerto_combo') else self.puerto_bascula.get()
@@ -712,14 +741,10 @@ class VentanaConfiguracion(ctk.CTkFrame):
     def _init_backup(self):
         frame = self.tab_backup
         ctk.CTkLabel(frame, text="Respaldo de base de datos", font=("Arial", 16, "bold")).pack(anchor="w", pady=10)
-
         btn_crear = ctk.CTkButton(frame, text="Crear respaldo", command=self._crear_backup)
         btn_crear.pack(pady=5)
-        crear_tooltip(btn_crear, "Crear un archivo de respaldo (.sql) de toda la base de datos")
-
         btn_restaurar = ctk.CTkButton(frame, text="Restaurar respaldo", command=self._restaurar_backup)
         btn_restaurar.pack(pady=5)
-        crear_tooltip(btn_restaurar, "Restaurar la base de datos desde un archivo de respaldo (.sql)")
 
     def _crear_backup(self):
         archivo = filedialog.asksaveasfilename(defaultextension=".sql", filetypes=[("SQL files", "*.sql")])
@@ -758,12 +783,9 @@ class VentanaConfiguracion(ctk.CTkFrame):
         self.tree_logs.heading("Usuario", text="Usuario")
         self.tree_logs.heading("Acción", text="Acción")
         self.tree_logs.pack(fill="both", expand=True, pady=10)
-        crear_tooltip(self.tree_logs, "Registro de acciones de los usuarios")
         self.cargar_logs()
-
         btn_refrescar_logs = ctk.CTkButton(frame, text="Refrescar", command=self.cargar_logs)
         btn_refrescar_logs.pack(pady=5)
-        crear_tooltip(btn_refrescar_logs, "Recargar el registro de actividades")
 
     def cargar_logs(self):
         for row in self.tree_logs.get_children():
@@ -793,4 +815,5 @@ class VentanaConfiguracion(ctk.CTkFrame):
             stats = f"Variedades: {total_variedades} | Productores: {total_productores}"
             ctk.CTkLabel(frame, text=stats, font=("Arial", 12)).pack(anchor="w", padx=20, pady=5)
         except:
+            
             pass

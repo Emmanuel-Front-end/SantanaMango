@@ -1,10 +1,16 @@
-# modulos/pesaje_lavado.py - Editor de tanda con pestañas (Peso + Jabas) + columna tanda_numero asegurada
+# modulos/pesaje_lavado.py - Edición con actualización automática de jabas al cambiar peso
 import customtkinter as ctk
 from tkinter import ttk, messagebox, filedialog, simpledialog
 from database import ejecutar_consulta
 from datetime import datetime
 from tkcalendar import DateEntry
 import pandas as pd
+import os
+import webbrowser
+from reportlab.lib.pagesizes import letter
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib import colors
 from utils.tooltip import crear_tooltip
 from utils.bascula import Bascula
 from auth import tiene_permiso
@@ -24,7 +30,7 @@ class VentanaPesajeLavado(ctk.CTkFrame):
         # Variables internas
         self.id_recepcion = None
         self.variedad_actual = ""
-        self.tandas_pendientes = []
+        self.tandas_pendientes = []      # Para tandas nuevas (pendientes de guardar)
         self.siguiente_tanda = 1
         self.bascula = Bascula()
         self.filtros_visibles = False
@@ -32,8 +38,10 @@ class VentanaPesajeLavado(ctk.CTkFrame):
         self.peso_jabas = {i: 5.0 for i in range(1, 8)}
         self.jabas_totales = 0
         self.lotes_por_carga = {}
+        self.modo_edicion = False        # True cuando se está editando una tanda existente
+        self.id_tanda_edicion = None     # ID de la tanda que se está editando
 
-        self._asegurar_tabla_pesaje()      # crea columnas faltantes
+        self._asegurar_tabla_pesaje()
         self._crear_tabla_configuracion()
         self.cargar_configuracion_pesaje()
 
@@ -65,17 +73,21 @@ class VentanaPesajeLavado(ctk.CTkFrame):
         actions_bar = ctk.CTkFrame(self, height=40, fg_color="transparent")
         actions_bar.grid(row=1, column=0, sticky="ew", padx=20, pady=5)
 
-        self.btn_eliminar_registro = ctk.CTkButton(actions_bar, text="🗑️ Eliminar registro", command=self.eliminar_registro, width=130, fg_color="#8b0000")
+        self.btn_eliminar_registro = ctk.CTkButton(actions_bar, text="🗑️ Eliminar", command=self.eliminar_registro, width=100, fg_color="#8b0000")
         self.btn_eliminar_registro.pack(side="left", padx=5)
-        crear_tooltip(self.btn_eliminar_registro, "Eliminar registro seleccionado del historial")
+        crear_tooltip(self.btn_eliminar_registro, "Eliminar la tanda seleccionada")
+
+        self.btn_editar_registro = ctk.CTkButton(actions_bar, text="✏️ Editar", command=self.cargar_tanda_para_editar, width=100, fg_color="#2e8b57")
+        self.btn_editar_registro.pack(side="left", padx=5)
+        crear_tooltip(self.btn_editar_registro, "Cargar la tanda seleccionada en el formulario para editarla")
 
         self.btn_excel = ctk.CTkButton(actions_bar, text="📊 Exportar Excel", command=self.exportar_excel, width=120, fg_color="#3a6ea5")
         self.btn_excel.pack(side="left", padx=5)
         crear_tooltip(self.btn_excel, "Exportar el historial a Excel")
 
-        self.btn_imprimir = ctk.CTkButton(actions_bar, text="🖨️ Imprimir Reporte", command=self.imprimir_reporte, width=130, fg_color="#2e8b57")
+        self.btn_imprimir = ctk.CTkButton(actions_bar, text="🖨️ Imprimir", command=self.imprimir_reporte, width=100, fg_color="#2e8b57")
         self.btn_imprimir.pack(side="left", padx=5)
-        crear_tooltip(self.btn_imprimir, "Imprimir reporte del pesaje seleccionado")
+        crear_tooltip(self.btn_imprimir, "Imprimir reporte de la tanda seleccionada")
 
         self.btn_filtros = ctk.CTkButton(actions_bar, text="🔍 Búsqueda", command=self.toggle_filtros, width=100, fg_color="#1f6aa5")
         self.btn_filtros.pack(side="left", padx=5)
@@ -89,20 +101,20 @@ class VentanaPesajeLavado(ctk.CTkFrame):
         search_frame = ctk.CTkFrame(self.filtros_frame, fg_color="transparent")
         search_frame.pack(fill="x", padx=15, pady=10)
 
-        ctk.CTkLabel(search_frame, text="🔍 NÚMERO DE CARGA:", font=("Arial", 12, "bold")).pack(side="left", padx=5)
-        self.buscar_carga_entry = ctk.CTkEntry(search_frame, width=200, placeholder_text="Ej: 12345")
+        ctk.CTkLabel(search_frame, text="🔍 CARGA:", font=("Arial", 12, "bold")).pack(side="left", padx=5)
+        self.buscar_carga_entry = ctk.CTkEntry(search_frame, width=180, placeholder_text="Número de carga")
         self.buscar_carga_entry.pack(side="left", padx=5)
         self.buscar_carga_entry.bind("<KeyRelease>", self.on_search_key_release)
 
         ctk.CTkLabel(search_frame, text="LOTE:", font=("Arial", 12, "bold")).pack(side="left", padx=5)
-        self.buscar_lote_combo = ttk.Combobox(search_frame, width=150, state="readonly")
+        self.buscar_lote_combo = ttk.Combobox(search_frame, width=120, state="readonly")
         self.buscar_lote_combo.pack(side="left", padx=5)
         self.cargar_lotes_combo()
 
         fecha_frame = ctk.CTkFrame(self.filtros_frame, fg_color="transparent")
         fecha_frame.pack(fill="x", padx=15, pady=5)
 
-        ctk.CTkLabel(fecha_frame, text="📅 FECHA DESDE:", font=("Arial", 12, "bold")).pack(side="left", padx=5)
+        ctk.CTkLabel(fecha_frame, text="📅 DESDE:", font=("Arial", 12, "bold")).pack(side="left", padx=5)
         self.filtro_fecha_desde = DateEntry(fecha_frame, width=12, date_pattern='yyyy-mm-dd')
         self.filtro_fecha_desde.set_date(datetime.now().replace(day=1))
         self.filtro_fecha_desde.pack(side="left", padx=5)
@@ -114,9 +126,8 @@ class VentanaPesajeLavado(ctk.CTkFrame):
         self.filtro_fecha_hasta.pack(side="left", padx=5)
         self.filtro_fecha_hasta.bind("<<DateEntrySelected>>", lambda e: self.aplicar_filtros())
 
-        btn_aplicar = ctk.CTkButton(fecha_frame, text="APLICAR FILTROS", command=self.aplicar_filtros, width=120, fg_color="#3a6ea5")
+        btn_aplicar = ctk.CTkButton(fecha_frame, text="APLICAR", command=self.aplicar_filtros, width=100, fg_color="#3a6ea5")
         btn_aplicar.pack(side="left", padx=10)
-        crear_tooltip(btn_aplicar, "Filtrar el historial de pesajes")
 
         # ========== CONTENEDOR PRINCIPAL (TRES COLUMNAS) ==========
         self.scrollable_frame = ctk.CTkScrollableFrame(self, fg_color="transparent")
@@ -142,7 +153,7 @@ class VentanaPesajeLavado(ctk.CTkFrame):
         self.fecha_entry.set_date(datetime.now())
 
         ctk.CTkLabel(grid_gen, text="CARGA:", font=("Arial", 12, "bold")).grid(row=1, column=0, padx=5, pady=5, sticky="e")
-        self.carga_combo = ttk.Combobox(grid_gen, width=20, state="normal")
+        self.carga_combo = ttk.Combobox(grid_gen, width=20, state="readonly")
         self.carga_combo.grid(row=1, column=1, padx=5, pady=5, sticky="w")
         self.carga_combo.bind("<<ComboboxSelected>>", self.on_carga_seleccionada)
 
@@ -164,22 +175,29 @@ class VentanaPesajeLavado(ctk.CTkFrame):
         self.lbl_progreso = ctk.CTkLabel(frame_gen, text="0 / 0 jabas", font=("Arial", 10))
         self.lbl_progreso.pack(pady=2)
 
+        # Frame para peso (label normal y entry editable para edición)
         frame_bascula = self._crear_tarjeta(col1, "⚖️ BÁSCULA")
         bascula_frame = ctk.CTkFrame(frame_bascula, fg_color="transparent")
         bascula_frame.pack(fill="x", padx=10, pady=5)
 
         self.peso_label = ctk.CTkLabel(bascula_frame, text="0.00", font=("Arial", 48, "bold"), text_color="#2e8b57")
         self.peso_label.pack(pady=10)
+
+        # Entry para editar peso (oculto inicialmente)
+        self.peso_edit_entry = ctk.CTkEntry(bascula_frame, font=("Arial", 48), justify="center", fg_color="#2a2a2a", text_color="#2e8b57")
+        self.peso_edit_entry.pack(pady=10)
+        self.peso_edit_entry.pack_forget()
+
         ctk.CTkLabel(bascula_frame, text="kilogramos", font=("Arial", 12)).pack()
 
         btn_frame = ctk.CTkFrame(bascula_frame, fg_color="transparent")
         btn_frame.pack(pady=10)
-        self.btn_obtener = ctk.CTkButton(btn_frame, text="🔄 OBTENER (F2)", command=self.obtener_y_agregar_con_deteccion, width=130)
+        self.btn_obtener = ctk.CTkButton(btn_frame, text="🔄 OBTENER (F2)", command=self.obtener_peso_edicion_o_nuevo, width=130)
         self.btn_obtener.pack(side="left", padx=5)
-        self.btn_manual = ctk.CTkButton(btn_frame, text="📥 MANUAL (F3)", command=self.agregar_tanda, width=100)
+        self.btn_manual = ctk.CTkButton(btn_frame, text="📥 MANUAL (F3)", command=self.manual_peso_edicion_o_nuevo, width=100)
         self.btn_manual.pack(side="left", padx=5)
 
-        # ---------- COLUMNA 2: JABAS + OBSERVACIONES + TANDAS ----------
+        # ---------- COLUMNA 2: JABAS + OBSERVACIONES + TANDAS PENDIENTES ----------
         col2 = ctk.CTkFrame(main_container, fg_color="transparent", corner_radius=15)
         col2.grid(row=0, column=1, sticky="nsew", padx=5, pady=5)
 
@@ -204,7 +222,7 @@ class VentanaPesajeLavado(ctk.CTkFrame):
         self.observaciones_entry = ctk.CTkEntry(frame_obs, width=250, placeholder_text="Observaciones para esta tanda")
         self.observaciones_entry.pack(padx=10, pady=5, fill="x")
 
-        frame_tandas = self._crear_tarjeta(col2, "📋 TANDAS AGREGADAS")
+        frame_tandas = self._crear_tarjeta(col2, "📋 TANDAS POR GUARDAR")
         self.tandas_scroll = ctk.CTkScrollableFrame(frame_tandas, height=150, fg_color="transparent")
         self.tandas_scroll.pack(fill="both", expand=True, padx=10, pady=5)
         self.actualizar_lista_tandas()
@@ -213,7 +231,7 @@ class VentanaPesajeLavado(ctk.CTkFrame):
         col3 = ctk.CTkFrame(main_container, fg_color="transparent", corner_radius=15)
         col3.grid(row=0, column=2, sticky="nsew", padx=5, pady=5)
 
-        frame_totales = self._crear_tarjeta(col3, "📊 TOTALES")
+        frame_totales = self._crear_tarjeta(col3, "📊 TOTALES (pendientes)")
         total_frame = ctk.CTkFrame(frame_totales, fg_color="transparent")
         total_frame.pack(fill="x", padx=10, pady=5)
 
@@ -233,43 +251,49 @@ class VentanaPesajeLavado(ctk.CTkFrame):
         acciones_frame = ctk.CTkFrame(frame_acciones, fg_color="transparent")
         acciones_frame.pack(fill="x", padx=10, pady=10)
 
-        self.btn_agregar_manual = ctk.CTkButton(acciones_frame, text="➕ AGREGAR (F3)", command=self.agregar_tanda, fg_color="#2e8b57")
-        self.btn_agregar_manual.pack(side="top", padx=5, pady=5, fill="x")
-        crear_tooltip(self.btn_agregar_manual, "Agregar tanda con el peso actual (F3)")
-
-        self.btn_guardar = ctk.CTkButton(acciones_frame, text="💾 GUARDAR (F10)", command=self.guardar_pesaje, fg_color="#2e8b57")
+        self.btn_guardar = ctk.CTkButton(acciones_frame, text="💾 GUARDAR (F10)", command=self.guardar_o_actualizar, fg_color="#2e8b57")
         self.btn_guardar.pack(side="top", padx=5, pady=5, fill="x")
-        crear_tooltip(self.btn_guardar, "Guardar todas las tandas pendientes (F10)")
+        crear_tooltip(self.btn_guardar, "Guardar nueva tanda o actualizar la existente (F10)")
 
-        self.btn_cancelar = ctk.CTkButton(acciones_frame, text="❌ CANCELAR TODO", command=self.cancelar_todo, fg_color="#8b0000")
-        self.btn_cancelar.pack(side="top", padx=5, pady=5, fill="x")
-        crear_tooltip(self.btn_cancelar, "Cancelar y limpiar todas las tandas pendientes")
+        self.btn_cancelar_edicion = ctk.CTkButton(acciones_frame, text="❌ CANCELAR EDICIÓN", command=self.cancelar_edicion, fg_color="#8b0000")
+        self.btn_cancelar_edicion.pack(side="top", padx=5, pady=5, fill="x")
+        crear_tooltip(self.btn_cancelar_edicion, "Cancelar edición y limpiar formulario")
+        self.btn_cancelar_edicion.pack_forget()
+
+        self.btn_agregar_nueva = ctk.CTkButton(acciones_frame, text="➕ NUEVA TANDA", command=self.nueva_tanda, fg_color="#2e8b57")
+        self.btn_agregar_nueva.pack(side="top", padx=5, pady=5, fill="x")
+        crear_tooltip(self.btn_agregar_nueva, "Limpiar formulario para ingresar una nueva tanda")
+
+        self.btn_cancelar_todo = ctk.CTkButton(acciones_frame, text="❌ CANCELAR TODO", command=self.cancelar_todo, fg_color="#8b0000")
+        self.btn_cancelar_todo.pack(side="top", padx=5, pady=5, fill="x")
+        crear_tooltip(self.btn_cancelar_todo, "Cancelar todas las tandas pendientes")
 
         # ---------- HISTORIAL ----------
         historial_frame = ctk.CTkFrame(self.scrollable_frame, fg_color="transparent", corner_radius=15)
         historial_frame.pack(fill="both", expand=True, pady=10)
 
-        self._crear_tarjeta(historial_frame, "📜 HISTORIAL DE PESAJE LAVADO")
+        self._crear_tarjeta(historial_frame, "📜 HISTORIAL DE TANDAS DE LAVADO")
 
         tree_container = ctk.CTkFrame(historial_frame, fg_color="transparent")
         tree_container.pack(fill="both", expand=True, padx=10, pady=5)
 
-        columnas_hist = ("ID", "Fecha", "N° Carga", "Lote", "Variedad", "Tandas", "Total Neto (kg)", "Jabas", "Usuario")
-        self.tree_historial = ttk.Treeview(tree_container, columns=columnas_hist, show="headings", height=10)
-        for col in columnas_hist:
+        columnas_hist = ("Fecha", "N° Carga", "Lote", "Variedad", "Tanda #", "Neto (kg)", "Jabas")
+        self.tree_historial = ttk.Treeview(tree_container, columns=columnas_hist, show="headings", height=15)
+        anchos = [100, 100, 100, 120, 70, 100, 80]
+        for col, ancho in zip(columnas_hist, anchos):
             self.tree_historial.heading(col, text=col)
-            self.tree_historial.column(col, width=100, anchor="center")
-        self.tree_historial.column("Total Neto (kg)", width=120)
-        self.tree_historial.column("Jabas", width=80)
+            self.tree_historial.column(col, width=ancho, anchor="center")
         self.tree_historial.pack(side="left", fill="both", expand=True)
 
         vsb_hist = ttk.Scrollbar(tree_container, orient="vertical", command=self.tree_historial.yview)
         vsb_hist.pack(side="right", fill="y")
         self.tree_historial.configure(yscrollcommand=vsb_hist.set)
 
-        self.bind("<F2>", lambda e: self.obtener_y_agregar_con_deteccion())
-        self.bind("<F3>", lambda e: self.agregar_tanda())
-        self.bind("<F10>", lambda e: self.guardar_pesaje())
+        self.tree_historial.bind("<Double-1>", self.mostrar_detalles_tanda)
+
+        self.bind("<F2>", lambda e: self.obtener_peso_edicion_o_nuevo())
+        self.bind("<F3>", lambda e: self.manual_peso_edicion_o_nuevo())
+        self.bind("<F10>", lambda e: self.guardar_o_actualizar())
         self.bind("<Delete>", lambda e: self.eliminar_ultima_tanda())
 
         self.cargar_lista_cargas()
@@ -284,10 +308,10 @@ class VentanaPesajeLavado(ctk.CTkFrame):
         return frame
 
     def _asegurar_tabla_pesaje(self):
-        """Crea las columnas necesarias si no existen."""
         try:
             ejecutar_consulta("ALTER TABLE pesaje_lavado ADD COLUMN IF NOT EXISTS num_jabas INTEGER DEFAULT 0")
             ejecutar_consulta("ALTER TABLE pesaje_lavado ADD COLUMN IF NOT EXISTS tanda_numero INTEGER DEFAULT 0")
+            ejecutar_consulta("ALTER TABLE pesaje_lavado ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
         except Exception as e:
             print(f"Error asegurando columnas: {e}")
 
@@ -309,6 +333,9 @@ class VentanaPesajeLavado(ctk.CTkFrame):
         query = "SELECT DISTINCT numero_carga FROM recepcion_carga WHERE estatus != 'CANCELADA' ORDER BY numero_carga DESC"
         res = ejecutar_consulta(query, fetchall=True)
         self.carga_combo['values'] = [r[0] for r in res] if res else []
+        if self.carga_combo['values'] and not self.carga_combo.get():
+            self.carga_combo.set(self.carga_combo['values'][0])
+            self.on_carga_seleccionada()
 
     def cargar_lotes_por_carga(self, numero_carga):
         query = """
@@ -329,14 +356,14 @@ class VentanaPesajeLavado(ctk.CTkFrame):
         nueva_carga = self.carga_combo.get().strip()
         if not nueva_carga:
             return
-        if self.tandas_pendientes:
+        if self.tandas_pendientes and not self.modo_edicion:
             resp = messagebox.askyesnocancel("Tandas pendientes",
                 "Hay tandas sin guardar. ¿Desea guardarlas antes de cambiar de carga?")
             if resp is None:
                 self.carga_combo.set(self.carga_anterior if hasattr(self, 'carga_anterior') else "")
                 return
             elif resp:
-                self.guardar_pesaje()
+                self.guardar_o_actualizar()
             else:
                 self.cancelar_todo()
         self.carga_anterior = nueva_carga
@@ -433,7 +460,9 @@ class VentanaPesajeLavado(ctk.CTkFrame):
             btn.configure(fg_color="#2e8b57" if i == seleccionado else ("#3a3a3a", "#565656"),
                           hover_color="#236b43" if i == seleccionado else ("#4a4a4a", "#6a6a6a"))
 
-    def obtener_y_agregar_con_deteccion(self):
+    # ========== MÉTODOS PARA PESO EN EDICIÓN O NUEVA TANDA ==========
+    def obtener_peso_edicion_o_nuevo(self):
+        """Obtiene peso de la báscula y actualiza el campo correspondiente (label o entry) y recalcula jabas."""
         if not self.bascula.conexion or not self.bascula.conexion.is_open:
             exito, _ = self.bascula.conectar()
             if not exito:
@@ -443,34 +472,50 @@ class VentanaPesajeLavado(ctk.CTkFrame):
         if peso is None:
             messagebox.showwarning("Sin lectura", "No se detectó peso.")
             return
-        self.peso_label.configure(text=f"{peso:.2f}")
-        self.peso_manual = peso
-        self.detectar_y_ajustar_jabas(peso)
-        self.agregar_tanda()
+        self.actualizar_peso_y_jabas(peso)
 
-    def detectar_y_ajustar_jabas(self, peso_neto):
-        if self.id_recepcion is None: return
-        variedad = self.variedad_actual.lower()
-        peso_neto_por_jaba = 18.0 if "ataulfo" in variedad else 16.0
-        mejor_n = 1
-        menor = float('inf')
-        for n in range(1,8):
-            esperado = n * peso_neto_por_jaba
-            diff = abs(peso_neto - esperado)
-            if diff < menor:
-                menor = diff
-                mejor_n = n
-        self.set_jabas(mejor_n)
+    def manual_peso_edicion_o_nuevo(self):
+        """Solicita peso manual y actualiza el campo correspondiente y recalcula jabas."""
+        peso = simpledialog.askfloat("Peso manual", "Ingrese peso neto (kg):", parent=self, minvalue=0.0)
+        if peso is not None:
+            self.actualizar_peso_y_jabas(peso)
+
+    def actualizar_peso_y_jabas(self, peso):
+        """Actualiza el widget de peso (label o entry) y recalcula jabas según la variedad."""
+        if self.modo_edicion:
+            self.peso_edit_entry.delete(0, "end")
+            self.peso_edit_entry.insert(0, f"{peso:.2f}")
+            self.peso_manual = peso
+        else:
+            self.peso_label.configure(text=f"{peso:.2f}")
+            self.peso_manual = peso
+        # Recalcular jabas
+        if self.id_recepcion:
+            variedad = self.variedad_actual.lower()
+            peso_neto_por_jaba = 18.0 if "ataulfo" in variedad else 16.0
+            mejor_n = 1
+            menor = float('inf')
+            for n in range(1, 8):
+                esperado = n * peso_neto_por_jaba
+                diff = abs(peso - esperado)
+                if diff < menor:
+                    menor = diff
+                    mejor_n = n
+            self.set_jabas(mejor_n)
 
     def agregar_tanda(self):
+        """Agrega la tanda actual (modo normal, no edición)."""
+        if self.modo_edicion:
+            messagebox.showinfo("Edición activa", "Para agregar una nueva tanda, primero cancele la edición actual.")
+            return
         if self.id_recepcion is None:
             messagebox.showerror("Recepción requerida", "Seleccione carga y lote.")
             return
         neto = getattr(self, 'peso_manual', 0.0)
         if neto == 0.0:
             if messagebox.askyesno("Peso no detectado", "¿Ingresar peso manualmente?"):
-                self.pedir_peso_manual()
-            return
+                self.manual_peso_edicion_o_nuevo()
+                return
         jabas = self.jabas_var.get()
         obs = self.observaciones_entry.get().strip()
         tanda_num = self.siguiente_tanda
@@ -493,13 +538,8 @@ class VentanaPesajeLavado(ctk.CTkFrame):
         self.set_jabas(1)
         messagebox.showinfo("Agregado", f"Tanda {tanda_num} agregada.")
 
-    def pedir_peso_manual(self):
-        peso = simpledialog.askfloat("Peso manual", "Ingrese peso neto (kg):", parent=self, minvalue=0.0)
-        if peso is not None:
-            self.peso_label.configure(text=f"{peso:.2f}")
-            self.peso_manual = peso
-            self.detectar_y_ajustar_jabas(peso)
-            self.agregar_tanda()
+    # ========== RESTO DE MÉTODOS (actualizar_lista_tandas, eliminar_tanda_individual, etc.) ==========
+    # ... (el resto del código permanece igual, pero incluyo métodos esenciales para que funcione)
 
     def actualizar_lista_tandas(self):
         for w in self.tandas_scroll.winfo_children():
@@ -512,125 +552,28 @@ class VentanaPesajeLavado(ctk.CTkFrame):
                 texto += f" - {p['observaciones']}"
             lbl = ctk.CTkLabel(frame, text=texto, anchor="w")
             lbl.pack(side="left", fill="x", expand=True, padx=5, pady=2)
-            btn_edit = ctk.CTkButton(frame, text="✏️", width=30, command=lambda i=idx: self.editar_tanda(i))
+            btn_edit = ctk.CTkButton(frame, text="✏️", width=30, command=lambda i=idx: self.editar_tanda_pendiente(i))
             btn_edit.pack(side="right", padx=2)
             btn_del = ctk.CTkButton(frame, text="✖", width=30, command=lambda i=idx: self.eliminar_tanda_individual(i))
             btn_del.pack(side="right", padx=2)
-            crear_tooltip(btn_edit, "Editar tanda (peso, jabas, observaciones)")
-            crear_tooltip(btn_del, "Eliminar esta tanda")
+            crear_tooltip(btn_edit, "Editar tanda pendiente")
+            crear_tooltip(btn_del, "Eliminar tanda pendiente")
 
-    # ========== EDITOR DE TANDA CON PESTAÑAS ==========
-    def editar_tanda(self, idx):
-        if idx < 0 or idx >= len(self.tandas_pendientes):
+    def editar_tanda_pendiente(self, idx):
+        if self.modo_edicion:
+            messagebox.showinfo("Edición activa", "Termine de editar la tanda actual o cancele.")
             return
         tanda = self.tandas_pendientes[idx]
-        top = ctk.CTkToplevel(self)
-        top.title(f"Editar Tanda {tanda['tanda']}")
-        top.geometry("550x500")
-        top.grab_set()
-        top.resizable(False, False)
-
-        temp_peso = ctk.DoubleVar(value=tanda['neto'])
-        temp_jabas = ctk.IntVar(value=tanda['jabas'])
-        temp_obs = ctk.StringVar(value=tanda['observaciones'])
-
-        def repesar():
-            if not self.bascula.conexion or not self.bascula.conexion.is_open:
-                exito, _ = self.bascula.conectar()
-                if not exito:
-                    messagebox.showerror("Error", "No se pudo conectar a la báscula.")
-                    return
-            peso_leido, _ = self.bascula.leer_peso()
-            if peso_leido is None:
-                messagebox.showwarning("Sin lectura", "No se detectó peso.")
-                return
-            temp_peso.set(peso_leido)
-            entry_peso.delete(0, "end")
-            entry_peso.insert(0, f"{peso_leido:.2f}")
-            if self.id_recepcion:
-                variedad_temp = self.variedad_actual.lower()
-                peso_neto_por_jaba = 18.0 if "ataulfo" in variedad_temp else 16.0
-                mejor_n = 1
-                menor = float('inf')
-                for n in range(1, 8):
-                    esperado = n * peso_neto_por_jaba
-                    diff = abs(peso_leido - esperado)
-                    if diff < menor:
-                        menor = diff
-                        mejor_n = n
-                temp_jabas.set(mejor_n)
-                for btn in botones_jabas:
-                    if int(btn.cget("text")) == mejor_n:
-                        btn.configure(fg_color="#2e8b57", hover_color="#236b43")
-                    else:
-                        btn.configure(fg_color=("#3a3a3a", "#565656"), hover_color=("#4a4a4a", "#6a6a6a"))
-
-        tabview = ctk.CTkTabview(top, width=500, height=380)
-        tabview.pack(padx=20, pady=(20,10), fill="both", expand=True)
-        tab_peso = tabview.add("⚖️ Peso")
-        tab_jabas = tabview.add("📦 Jabas")
-
-        # Pestaña Peso
-        frame_peso = ctk.CTkFrame(tab_peso, fg_color="transparent")
-        frame_peso.pack(fill="both", expand=True, padx=20, pady=20)
-        ctk.CTkLabel(frame_peso, text="Peso neto (kg):", font=("Arial", 12, "bold")).pack(anchor="w", pady=(0,5))
-        entry_peso = ctk.CTkEntry(frame_peso, width=150, textvariable=temp_peso)
-        entry_peso.pack(anchor="w", pady=5)
-        btn_repesar = ctk.CTkButton(frame_peso, text="🔄 Obtener peso de báscula", command=repesar, width=200)
-        btn_repesar.pack(anchor="w", pady=10)
-        ctk.CTkLabel(frame_peso, text="Observaciones:", font=("Arial", 12, "bold")).pack(anchor="w", pady=(15,5))
-        entry_obs = ctk.CTkEntry(frame_peso, width=400, textvariable=temp_obs, placeholder_text="Observaciones")
-        entry_obs.pack(anchor="w", fill="x", pady=5)
-
-        # Pestaña Jabas (botones 2x4)
-        frame_jabas_tab = ctk.CTkFrame(tab_jabas, fg_color="transparent")
-        frame_jabas_tab.pack(fill="both", expand=True, padx=20, pady=20)
-        ctk.CTkLabel(frame_jabas_tab, text="Número de jabas:", font=("Arial", 12, "bold")).pack(anchor="w", pady=(0,10))
-        grid_frame = ctk.CTkFrame(frame_jabas_tab, fg_color="transparent")
-        grid_frame.pack(anchor="center", pady=10)
-        botones_jabas = []
-        def seleccionar_jabas_btn(valor):
-            temp_jabas.set(valor)
-            for btn in botones_jabas:
-                if int(btn.cget("text")) == valor:
-                    btn.configure(fg_color="#2e8b57", hover_color="#236b43")
-                else:
-                    btn.configure(fg_color=("#3a3a3a", "#565656"), hover_color=("#4a4a4a", "#6a6a6a"))
-        for i in range(1, 8):
-            btn = ctk.CTkButton(grid_frame, text=str(i), width=70, height=70, font=("Arial", 18, "bold"),
-                                command=lambda v=i: seleccionar_jabas_btn(v))
-            fila = 0 if i <= 4 else 1
-            col = (i-1) % 4
-            btn.grid(row=fila, column=col, padx=5, pady=5)
-            botones_jabas.append(btn)
-        seleccionar_jabas_btn(temp_jabas.get())
-        temp_jabas.trace_add("write", lambda *args: seleccionar_jabas_btn(temp_jabas.get()))
-
-        # Botones guardar/cancelar
-        btn_frame = ctk.CTkFrame(top, fg_color="transparent")
-        btn_frame.pack(pady=15, fill="x")
-        btn_guardar = ctk.CTkButton(btn_frame, text="Guardar cambios", command=lambda: guardar_edicion(), fg_color="#2e8b57", width=120)
-        btn_guardar.pack(side="right", padx=10)
-        btn_cancelar = ctk.CTkButton(btn_frame, text="Cancelar", command=top.destroy, fg_color="#8b0000", width=100)
-        btn_cancelar.pack(side="right", padx=10)
-
-        def guardar_edicion():
-            try:
-                nuevo_peso = temp_peso.get()
-                if nuevo_peso < 0:
-                    raise ValueError
-            except:
-                messagebox.showerror("Error", "Peso inválido.")
-                return
-            nuevas_jabas = temp_jabas.get()
-            nueva_obs = temp_obs.get().strip()
-            self.tandas_pendientes[idx]["neto"] = nuevo_peso
-            self.tandas_pendientes[idx]["jabas"] = nuevas_jabas
-            self.tandas_pendientes[idx]["observaciones"] = nueva_obs
-            self.actualizar_lista_tandas()
-            self.actualizar_totales()
-            top.destroy()
-            messagebox.showinfo("Editado", "Tanda actualizada correctamente.")
+        self.peso_label.configure(text=f"{tanda['neto']:.2f}")
+        self.peso_manual = tanda['neto']
+        self.set_jabas(tanda['jabas'])
+        self.observaciones_entry.delete(0, "end")
+        self.observaciones_entry.insert(0, tanda['observaciones'])
+        del self.tandas_pendientes[idx]
+        self.siguiente_tanda = len(self.tandas_pendientes) + 1
+        self.actualizar_lista_tandas()
+        self.actualizar_totales()
+        messagebox.showinfo("Editar", "Puede modificar peso, jabas y observaciones, luego presione GUARDAR.")
 
     def eliminar_tanda_individual(self, idx):
         del self.tandas_pendientes[idx]
@@ -670,7 +613,193 @@ class VentanaPesajeLavado(ctk.CTkFrame):
         self.progress_bar.set(procesadas / self.jabas_totales)
         self.lbl_progreso.configure(text=f"{procesadas} / {self.jabas_totales} jabas")
 
-    def guardar_pesaje(self):
+    # ========== VENTANA DE DETALLES (Doble clic) ==========
+    def mostrar_detalles_tanda(self, event):
+        seleccion = self.tree_historial.selection()
+        if not seleccion:
+            return
+        id_tanda = self.tree_historial.item(seleccion[0])['tags'][0]
+        datos = ejecutar_consulta("""
+            SELECT pl.id, pl.fecha, rc.numero_carga, l.numero_lote, rc.variedad,
+                   pl.tanda_numero, pl.neto, pl.num_jabas, pl.observaciones,
+                   pl.created_at, pl.updated_at
+            FROM pesaje_lavado pl
+            JOIN recepcion_carga rc ON pl.id_recepcion = rc.id
+            LEFT JOIN lotes l ON rc.lote_id = l.id
+            WHERE pl.id = %s
+        """, (id_tanda,), fetchone=True)
+        if not datos:
+            messagebox.showerror("Error", "No se encontraron datos.")
+            return
+        modal = ctk.CTkToplevel(self)
+        modal.title(f"Detalles de la Tanda #{datos[5]} - Carga {datos[2]}")
+        modal.geometry("600x500")
+        modal.grab_set()
+        main_frame = ctk.CTkFrame(modal, fg_color="transparent")
+        main_frame.pack(fill="both", expand=True, padx=20, pady=20)
+
+        ctk.CTkLabel(main_frame, text="📋 INFORMACIÓN DE LA TANDA", font=("Arial", 16, "bold")).pack(anchor="w", pady=(0,10))
+        info = [
+            f"Fecha: {datos[1].strftime('%d/%m/%Y') if datos[1] else '-'}",
+            f"N° Carga: {datos[2]}",
+            f"Lote: {datos[3] or '-'}",
+            f"Variedad: {datos[4].title() if datos[4] else '-'}",
+            f"Tanda #: {datos[5]}",
+            f"Neto: {datos[6]:.2f} kg",
+            f"Jabas: {datos[7]}",
+            f"Observaciones: {datos[8] or 'Ninguna'}",
+            f"Creado: {datos[9].strftime('%d/%m/%Y %H:%M:%S') if datos[9] else '-'}",
+            f"Última modificación: {datos[10].strftime('%d/%m/%Y %H:%M:%S') if datos[10] else '-'}"
+        ]
+        for linea in info:
+            ctk.CTkLabel(main_frame, text=linea, font=("Arial", 12), anchor="w").pack(fill="x", pady=2)
+        btn_cerrar = ctk.CTkButton(main_frame, text="Cerrar", command=modal.destroy, width=100, fg_color="#8b0000")
+        btn_cerrar.pack(pady=20)
+
+    # ========== EDICIÓN DE TANDAS EXISTENTES ==========
+    def cargar_tanda_para_editar(self):
+        seleccion = self.tree_historial.selection()
+        if not seleccion:
+            messagebox.showwarning("Selección", "Seleccione una tanda del historial.")
+            return
+        item = self.tree_historial.item(seleccion[0])
+        id_tanda = item['tags'][0] if item['tags'] else None
+        if not id_tanda:
+            messagebox.showerror("Error", "No se pudo identificar la tanda.")
+            return
+        datos = ejecutar_consulta("""
+            SELECT pl.id, pl.fecha, rc.numero_carga, l.numero_lote, rc.variedad,
+                   pl.tanda_numero, pl.neto, pl.num_jabas, pl.observaciones,
+                   pl.id_recepcion
+            FROM pesaje_lavado pl
+            JOIN recepcion_carga rc ON pl.id_recepcion = rc.id
+            LEFT JOIN lotes l ON rc.lote_id = l.id
+            WHERE pl.id = %s
+        """, (id_tanda,), fetchone=True)
+        if not datos:
+            messagebox.showerror("Error", "No se encontraron datos de la tanda.")
+            return
+
+        self.cancelar_todo()
+        self.modo_edicion = True
+        self.id_tanda_edicion = id_tanda
+
+        self.fecha_entry.set_date(datos[1])
+        carga = datos[2]
+        self.carga_combo.set(carga)
+        self.on_carga_seleccionada()
+        lote = datos[3] or ""
+        if lote in self.lote_combo['values']:
+            self.lote_combo.set(lote)
+            self.on_lote_seleccionado()
+        self.set_jabas(datos[7])
+        # Mostrar entry editable y ocultar label
+        self.peso_label.pack_forget()
+        self.peso_edit_entry.pack(pady=10)
+        self.peso_edit_entry.delete(0, "end")
+        self.peso_edit_entry.insert(0, f"{datos[6]:.2f}")
+        # Vincular evento para recalcular jabas al escribir
+        self.peso_edit_entry.bind("<KeyRelease>", lambda e: self.actualizar_jabas_desde_peso_edit())
+        self.peso_manual = datos[6]
+        self.observaciones_entry.delete(0, "end")
+        self.observaciones_entry.insert(0, datos[8] or "")
+
+        self.carga_combo.configure(state="readonly")
+        self.lote_combo.configure(state="readonly")
+        self.fecha_entry.configure(state="normal")
+
+        self.btn_guardar.configure(text="💾 ACTUALIZAR TANDA", fg_color="#e69500")
+        self.btn_cancelar_edicion.pack(side="top", padx=5, pady=5, fill="x")
+        self.btn_agregar_nueva.pack_forget()
+        self.btn_cancelar_todo.pack_forget()
+        messagebox.showinfo("Edición", "Puede modificar carga, lote, fecha, peso, jabas y observaciones. El peso actualiza jabas automáticamente.")
+
+    def actualizar_jabas_desde_peso_edit(self):
+        """Lee el peso del entry de edición y recalcula las jabas."""
+        try:
+            peso = float(self.peso_edit_entry.get())
+            if self.id_recepcion:
+                variedad = self.variedad_actual.lower()
+                peso_neto_por_jaba = 18.0 if "ataulfo" in variedad else 16.0
+                mejor_n = 1
+                menor = float('inf')
+                for n in range(1, 8):
+                    esperado = n * peso_neto_por_jaba
+                    diff = abs(peso - esperado)
+                    if diff < menor:
+                        menor = diff
+                        mejor_n = n
+                self.set_jabas(mejor_n)
+        except:
+            pass
+
+    def cancelar_edicion(self):
+        self.modo_edicion = False
+        self.id_tanda_edicion = None
+        self.carga_combo.configure(state="readonly")
+        self.lote_combo.configure(state="readonly")
+        self.fecha_entry.configure(state="normal")
+        # Volver a mostrar label y ocultar entry
+        self.peso_edit_entry.pack_forget()
+        self.peso_label.pack(pady=10)
+        self.peso_edit_entry.unbind("<KeyRelease>")
+        self.limpiar_formulario()
+        self.btn_guardar.configure(text="💾 GUARDAR (F10)", fg_color="#2e8b57")
+        self.btn_cancelar_edicion.pack_forget()
+        self.btn_agregar_nueva.pack(side="top", padx=5, pady=5, fill="x")
+        self.btn_cancelar_todo.pack(side="top", padx=5, pady=5, fill="x")
+        self.cargar_historial()
+
+    def guardar_o_actualizar(self):
+        if self.modo_edicion:
+            self.actualizar_tanda_existente()
+        else:
+            self.guardar_tandas_pendientes()
+
+    def actualizar_tanda_existente(self):
+        if not self.modo_edicion or self.id_tanda_edicion is None:
+            return
+        try:
+            nuevo_neto = float(self.peso_edit_entry.get())
+            nuevas_jabas = self.jabas_var.get()
+            nuevas_obs = self.observaciones_entry.get().strip()
+            nueva_fecha = self.fecha_entry.get_date()
+            nueva_carga = self.carga_combo.get().strip()
+            nuevo_lote = self.lote_combo.get().strip()
+        except:
+            messagebox.showerror("Error", "Verifique los datos ingresados.")
+            return
+
+        if not nueva_carga or not nuevo_lote:
+            messagebox.showerror("Error", "Debe seleccionar carga y lote.")
+            return
+        res = ejecutar_consulta("""
+            SELECT r.id FROM recepcion_carga r
+            LEFT JOIN lotes l ON r.lote_id = l.id
+            WHERE r.numero_carga = %s AND l.numero_lote = %s
+        """, (nueva_carga, nuevo_lote), fetchone=True)
+        if not res:
+            messagebox.showerror("Error", f"No se encontró la combinación de carga '{nueva_carga}' y lote '{nuevo_lote}'.")
+            return
+        nuevo_id_recepcion = res[0]
+
+        if nueva_fecha > datetime.now().date():
+            if not messagebox.askyesno("Fecha futura", "La fecha ingresada es futura. ¿Desea continuar?"):
+                return
+
+        try:
+            ejecutar_consulta("""
+                UPDATE pesaje_lavado
+                SET id_recepcion = %s, fecha = %s, neto = %s, num_jabas = %s, observaciones = %s, updated_at = %s
+                WHERE id = %s
+            """, (nuevo_id_recepcion, nueva_fecha, nuevo_neto, nuevas_jabas, nuevas_obs, datetime.now(), self.id_tanda_edicion))
+            messagebox.showinfo("Éxito", "Tanda actualizada correctamente.")
+            self.cancelar_edicion()
+            self.cargar_historial()
+        except Exception as e:
+            messagebox.showerror("Error", f"No se pudo actualizar: {str(e)}")
+
+    def guardar_tandas_pendientes(self):
         if self.id_recepcion is None:
             messagebox.showerror("Error", "Seleccione carga y lote.")
             return
@@ -687,15 +816,42 @@ class VentanaPesajeLavado(ctk.CTkFrame):
             for p in self.tandas_pendientes:
                 ejecutar_consulta("""
                     INSERT INTO pesaje_lavado
-                    (id_recepcion, fecha, tanda_numero, bruto, tara, neto, num_jabas, observaciones, usuario_creacion, created_at)
-                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-                """, (self.id_recepcion, fecha, p["tanda"], p["neto"], 0, p["neto"],
-                      p["jabas"], p["observaciones"], usuario, datetime.now()))
+                    (id_recepcion, fecha, tanda_numero, neto, num_jabas, observaciones, usuario_creacion, created_at, updated_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """, (self.id_recepcion, fecha, p["tanda"], p["neto"],
+                      p["jabas"], p["observaciones"], usuario, datetime.now(), datetime.now()))
             messagebox.showinfo("Éxito", f"Se guardaron {len(self.tandas_pendientes)} tanda(s).")
             self.cancelar_todo()
             self.cargar_historial()
         except Exception as e:
             messagebox.showerror("Error", f"No se pudo guardar: {str(e)}")
+
+    def nueva_tanda(self):
+        if self.modo_edicion:
+            self.cancelar_edicion()
+        else:
+            self.limpiar_formulario()
+        self.cargar_lista_cargas()
+
+    def limpiar_formulario(self):
+        self.carga_combo.set("")
+        self.lote_combo.set("")
+        self.variedad_combo.set("")
+        self.lbl_jabas_ingresadas.configure(text="0")
+        self.jabas_totales = 0
+        self.peso_label.configure(text="0.00")
+        self.peso_manual = 0.0
+        self.observaciones_entry.delete(0, "end")
+        self.set_jabas(1)
+        self.fecha_entry.set_date(datetime.now())
+        self.id_recepcion = None
+        self.variedad_actual = ""
+        self.progress_bar.set(0)
+        self.lbl_progreso.configure(text="0 / 0 jabas")
+        self.tandas_pendientes.clear()
+        self.siguiente_tanda = 1
+        self.actualizar_lista_tandas()
+        self.actualizar_totales()
 
     def cancelar_todo(self):
         self.id_recepcion = None
@@ -719,7 +875,10 @@ class VentanaPesajeLavado(ctk.CTkFrame):
         self.lbl_progreso.configure(text="0 / 0 jabas")
         self.fecha_entry.set_date(datetime.now())
         self.lotes_por_carga.clear()
+        if self.modo_edicion:
+            self.cancelar_edicion()
 
+    # ========== HISTORIAL (carga) ==========
     def cargar_historial(self, filtros=None):
         for item in self.tree_historial.get_children():
             self.tree_historial.delete(item)
@@ -739,22 +898,22 @@ class VentanaPesajeLavado(ctk.CTkFrame):
         where = " AND ".join(cond) if cond else "1=1"
         query = f"""
             SELECT pl.id, pl.fecha, rc.numero_carga, l.numero_lote, rc.variedad,
-                   COUNT(*) as tandas, SUM(pl.neto) as total_neto, SUM(pl.num_jabas) as total_jabas,
-                   pl.usuario_creacion
+                   pl.tanda_numero, pl.neto, pl.num_jabas
             FROM pesaje_lavado pl
             JOIN recepcion_carga rc ON pl.id_recepcion = rc.id
             LEFT JOIN lotes l ON rc.lote_id = l.id
             WHERE {where}
-            GROUP BY pl.id, pl.fecha, rc.numero_carga, l.numero_lote, rc.variedad, pl.usuario_creacion
-            ORDER BY pl.fecha DESC
+            ORDER BY pl.fecha DESC, pl.tanda_numero
         """
         res = ejecutar_consulta(query, tuple(params), fetchall=True)
         for r in res:
             self.tree_historial.insert("", "end", values=(
-                r[0], r[1].strftime("%d/%m/%Y") if r[1] else "", r[2], r[3] or "",
-                r[4].title() if r[4] else "", r[5], f"{r[6]:.2f}", r[7] or 0, r[8] or "admin"
+                r[1].strftime("%d/%m/%Y") if r[1] else "",
+                r[2], r[3] or "", r[4].title() if r[4] else "",
+                r[5], f"{r[6]:.2f}", r[7] or 0
             ), tags=(r[0],))
 
+    # ========== FILTROS, ETC. ==========
     def aplicar_filtros(self):
         filtros = {}
         carga = self.buscar_carga_entry.get().strip()
@@ -800,7 +959,7 @@ class VentanaPesajeLavado(ctk.CTkFrame):
             messagebox.showwarning("Selección", "Seleccione un registro.")
             return
         id_ = self.tree_historial.item(sel[0])['tags'][0]
-        if messagebox.askyesno("Confirmar", "¿Eliminar este registro y todas sus tandas?"):
+        if messagebox.askyesno("Confirmar", "¿Eliminar esta tanda?"):
             try:
                 ejecutar_consulta("DELETE FROM pesaje_lavado WHERE id = %s", (id_,))
                 messagebox.showinfo("Eliminado", "Registro eliminado.")
@@ -822,7 +981,57 @@ class VentanaPesajeLavado(ctk.CTkFrame):
             messagebox.showinfo("Exportado", f"Guardado en {archivo}")
 
     def imprimir_reporte(self):
-        messagebox.showinfo("Reporte", "Funcionalidad en desarrollo.")
+        seleccion = self.tree_historial.selection()
+        if not seleccion:
+            messagebox.showwarning("Selección", "Seleccione una tanda para imprimir.")
+            return
+        id_tanda = self.tree_historial.item(seleccion[0])['tags'][0]
+        self._imprimir_tanda(id_tanda)
+
+    def _imprimir_tanda(self, id_tanda):
+        datos = ejecutar_consulta("""
+            SELECT pl.fecha, rc.numero_carga, l.numero_lote, rc.variedad,
+                   pl.tanda_numero, pl.neto, pl.num_jabas
+            FROM pesaje_lavado pl
+            JOIN recepcion_carga rc ON pl.id_recepcion = rc.id
+            LEFT JOIN lotes l ON rc.lote_id = l.id
+            WHERE pl.id = %s
+        """, (id_tanda,), fetchone=True)
+        if not datos:
+            messagebox.showerror("Error", "No se encontraron datos.")
+            return
+        os.makedirs("reportes", exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        archivo = os.path.join("reportes", f"Tanda_Lavado_{id_tanda}_{timestamp}.pdf")
+        doc = SimpleDocTemplate(archivo, pagesize=letter)
+        elementos = []
+        styles = getSampleStyleSheet()
+        titulo_style = ParagraphStyle('Titulo', parent=styles['Title'], fontSize=14, alignment=1, spaceAfter=12)
+        normal_style = styles['Normal']
+        elementos.append(Paragraph("REPORTE DE TANDA DE LAVADO", titulo_style))
+        elementos.append(Spacer(1, 12))
+        data = [
+            ["Fecha", datos[0].strftime("%d/%m/%Y") if datos[0] else ""],
+            ["N° Carga", datos[1]],
+            ["Lote", datos[2] or ""],
+            ["Variedad", datos[3].title() if datos[3] else ""],
+            ["Tanda #", str(datos[4])],
+            ["Neto (kg)", f"{datos[5]:.2f}"],
+            ["Jabas", str(datos[6])]
+        ]
+        tabla = Table(data, colWidths=[100, 300])
+        tabla.setStyle(TableStyle([
+            ('FONTNAME', (0,0), (-1,-1), 'Helvetica'),
+            ('FONTSIZE', (0,0), (-1,-1), 10),
+            ('ALIGN', (0,0), (0,-1), 'RIGHT'),
+            ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+            ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
+            ('BACKGROUND', (0,0), (0,-1), colors.lightgrey),
+        ]))
+        elementos.append(tabla)
+        doc.build(elementos)
+        webbrowser.open(archivo)
+        messagebox.showinfo("Impresión", f"Reporte generado en:\n{archivo}")
 
     def regresar_menu(self):
         if self.on_regresar:
