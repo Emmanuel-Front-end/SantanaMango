@@ -1,4 +1,4 @@
-# auth.py - Sistema de autenticación y permisos con cifrado reversible de contraseñas
+# auth.py - Sistema de autenticación y permisos sin archivo de texto plano
 import os
 import json
 import secrets
@@ -64,24 +64,7 @@ def cargar_sesion():
     except Exception as e:
         print(f"Error cargando sesión segura: {e}")
 
-    # Fallback: archivo simple
-    try:
-        if os.path.exists("session_user.txt"):
-            with open("session_user.txt", "r") as f:
-                contenido = f.read().strip()
-                if "|" in contenido:
-                    usuario, rol = contenido.split("|")
-                else:
-                    usuario, rol = contenido, "operador"
-            resultado = ejecutar_consulta("SELECT id FROM usuarios WHERE nombre_usuario = %s", (usuario,), fetchone=True)
-            if resultado:
-                usuario_id = resultado[0]
-                permisos = cargar_permisos_usuario(usuario_id)
-                return usuario, rol, permisos
-    except Exception as e:
-        print(f"Error cargando sesión simple: {e}")
-
-    # Usuario por defecto (solo desarrollo)
+    # Usuario por defecto (solo desarrollo - eliminar en producción)
     print("ADVERTENCIA: Usando usuario admin por defecto sin autenticación real.")
     return "admin", "admin", obtener_permisos_admin()
 
@@ -134,5 +117,3 @@ def tiene_permiso(permisos, modulo, accion):
 def cerrar_sesion():
     if os.path.exists(SESSION_FILE):
         os.remove(SESSION_FILE)
-    if os.path.exists("session_user.txt"):
-        os.remove("session_user.txt")

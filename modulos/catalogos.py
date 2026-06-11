@@ -1,4 +1,5 @@
-# modulos/catalogos.py - Gestión de catálogos con redirección a registros asociados (con tooltips)
+# modulos/catalogos.py - Gestión de catálogos con redirección a registros asociados
+# Incluye configuración de pesaje (taras de jabas) DINÁMICA con botón GUARDAR siempre visible
 import customtkinter as ctk
 from tkinter import ttk, messagebox, filedialog, simpledialog
 from database import ejecutar_consulta
@@ -8,6 +9,7 @@ import pandas as pd
 import hashlib
 from utils.tooltip import crear_tooltip
 from auth import tiene_permiso
+from utils.bascula import Bascula
 
 class VentanaCatalogos(ctk.CTkFrame):
     _ventanas_activas = {}
@@ -43,8 +45,11 @@ class VentanaCatalogos(ctk.CTkFrame):
         self.scroll_frame = ctk.CTkScrollableFrame(self, fg_color="transparent")
         self.scroll_frame.grid(row=1, column=0, sticky="nsew", padx=20, pady=10)
 
+        self.lbl_status = None   # Inicializar atributo de estado
+
         self.mostrar_nivel_recepcion()
 
+    # ---------- MÉTODOS GENERALES ----------
     def regresar_menu(self):
         if self.on_regresar:
             self.on_regresar()
@@ -80,14 +85,6 @@ class VentanaCatalogos(ctk.CTkFrame):
 
     # ---------- FUNCIÓN PARA MOSTRAR RECEPCIONES ASOCIADAS ----------
     def _mostrar_recepciones_asociadas(self, tabla, id_registro, nombre_campo_id, nombre_campo_texto=None):
-        """
-        Muestra una ventana con las recepciones que referencian un registro de catálogo.
-        tabla: nombre de la tabla de catálogo (ej: 'lotes')
-        id_registro: ID del registro que se intenta eliminar
-        nombre_campo_id: nombre de la columna FK en recepcion_carga (ej: 'lote_id')
-        nombre_campo_texto: nombre del campo para mostrar el valor del catálogo (ej: 'numero_lote')
-        """
-        # Obtener el nombre del registro para mostrarlo en el título
         if nombre_campo_texto:
             query_nombre = f"SELECT {nombre_campo_texto} FROM {tabla} WHERE id = %s"
             nombre_valor = ejecutar_consulta(query_nombre, (id_registro,), fetchone=True)
@@ -95,7 +92,6 @@ class VentanaCatalogos(ctk.CTkFrame):
         else:
             nombre_registro = f"ID {id_registro}"
 
-        # Consultar las recepciones que usan este registro
         query = """
             SELECT r.folio, r.numero_carga, to_char(r.fecha_hora, 'DD/MM/YYYY') as fecha,
                    l.numero_lote, p.nombre as productor, r.cajas_llenas
@@ -107,7 +103,6 @@ class VentanaCatalogos(ctk.CTkFrame):
         """.format(nombre_campo_id)
         resultados = ejecutar_consulta(query, (id_registro,), fetchall=True)
 
-        # Crear ventana
         ventana = ctk.CTkToplevel(self)
         ventana.title(f"Recepciones que usan {nombre_registro}")
         ventana.geometry("800x400")
@@ -119,7 +114,6 @@ class VentanaCatalogos(ctk.CTkFrame):
         ctk.CTkLabel(frame, text=f"Registros encontrados: {len(resultados)}", font=("Arial", 12, "bold")).pack(anchor="w", pady=5)
 
         if resultados:
-            # Crear Treeview
             columnas = ("Folio", "No. Carga", "Fecha", "Lote", "Productor", "Cajas Llenas")
             tree = ttk.Treeview(frame, columns=columnas, show="headings", height=15)
             for col in columnas:
@@ -130,7 +124,6 @@ class VentanaCatalogos(ctk.CTkFrame):
             for r in resultados:
                 tree.insert("", "end", values=r)
 
-            # Scrollbars
             vsb = ttk.Scrollbar(frame, orient="vertical", command=tree.yview)
             vsb.pack(side="right", fill="y")
             tree.configure(yscrollcommand=vsb.set)
@@ -140,10 +133,8 @@ class VentanaCatalogos(ctk.CTkFrame):
         btn_cerrar = ctk.CTkButton(frame, text="Cerrar", command=ventana.destroy, width=100)
         btn_cerrar.pack(pady=10)
         crear_tooltip(btn_cerrar, "Cerrar esta ventana")
-
         self._enfocar_ventana(ventana)
 
-    # ---------- MÉTODO PARA MANEJAR ERROR DE CLAVE FORÁNEA ----------
     def _manejar_error_eliminacion(self, parent_ventana, e, tabla, id_registro, nombre_campo_id, nombre_campo_texto):
         if "viola la llave foránea" in str(e) or "foreign key constraint" in str(e):
             respuesta = messagebox.askyesno(
@@ -164,20 +155,287 @@ class VentanaCatalogos(ctk.CTkFrame):
         self.lbl_titulo.configure(text="📦 CATÁLOGOS")
         center_frame = ctk.CTkFrame(self.scroll_frame, fg_color="transparent")
         center_frame.pack(expand=True, fill="both")
-        card = ctk.CTkFrame(center_frame, corner_radius=20, border_width=2,
-                           border_color="#2e8b57", fg_color=("#f0f0f0", "#2a2a2a"),
-                           width=350, height=200)
-        card.pack(expand=True, pady=50)
-        card.grid_propagate(False)
-        ctk.CTkLabel(card, text="📦", font=("Segoe UI", 64)).pack(pady=(30, 10))
-        ctk.CTkLabel(card, text="RECEPCIÓN", font=("Arial", 24, "bold")).pack()
-        ctk.CTkLabel(card, text="Gestionar catálogos utilizados en recepción",
+        
+        cards_frame = ctk.CTkFrame(center_frame, fg_color="transparent")
+        cards_frame.pack(expand=True, pady=50)
+        cards_frame.grid_columnconfigure(0, weight=1)
+        cards_frame.grid_columnconfigure(1, weight=1)
+        
+        # Tarjeta RECEPCIÓN
+        card_recepcion = ctk.CTkFrame(cards_frame, corner_radius=20, border_width=2,
+                                     border_color="#2e8b57", fg_color=("#f0f0f0", "#2a2a2a"),
+                                     width=350, height=200)
+        card_recepcion.grid(row=0, column=0, padx=20, pady=20)
+        card_recepcion.grid_propagate(False)
+        ctk.CTkLabel(card_recepcion, text="📦", font=("Segoe UI", 64)).pack(pady=(30, 10))
+        ctk.CTkLabel(card_recepcion, text="RECEPCIÓN", font=("Arial", 24, "bold")).pack()
+        ctk.CTkLabel(card_recepcion, text="Gestionar catálogos utilizados en recepción",
                     font=("Arial", 12), text_color="gray").pack(pady=5)
-        btn = ctk.CTkButton(card, text="Acceder", command=self.mostrar_nivel_catalogos,
-                           width=150, height=40, fg_color="#2e8b57", font=("Arial", 14, "bold"))
-        btn.pack(pady=20)
-        crear_tooltip(btn, "Ver todos los catálogos de recepción")
+        btn_recepcion = ctk.CTkButton(card_recepcion, text="Acceder", command=self.mostrar_nivel_catalogos,
+                                     width=150, height=40, fg_color="#2e8b57", font=("Arial", 14, "bold"))
+        btn_recepcion.pack(pady=20)
+        crear_tooltip(btn_recepcion, "Ver todos los catálogos de recepción")
+        
+        # Tarjeta PESAJE
+        card_pesaje = ctk.CTkFrame(cards_frame, corner_radius=20, border_width=2,
+                                   border_color="#2e8b57", fg_color=("#f0f0f0", "#2a2a2a"),
+                                   width=350, height=200)
+        card_pesaje.grid(row=0, column=1, padx=20, pady=20)
+        card_pesaje.grid_propagate(False)
+        ctk.CTkLabel(card_pesaje, text="⚖️", font=("Segoe UI", 64)).pack(pady=(30, 10))
+        ctk.CTkLabel(card_pesaje, text="PESAJE", font=("Arial", 24, "bold")).pack()
+        ctk.CTkLabel(card_pesaje, text="Configurar taras de jabas (peso total por cantidad de jabas)",
+                    font=("Arial", 12), text_color="gray").pack(pady=5)
+        btn_pesaje = ctk.CTkButton(card_pesaje, text="Acceder", command=self.mostrar_nivel_pesaje,
+                                   width=150, height=40, fg_color="#2e8b57", font=("Arial", 14, "bold"))
+        btn_pesaje.pack(pady=20)
+        crear_tooltip(btn_pesaje, "Configuración de taras por número de jabas")
 
+    # ========== SECCIÓN: CONFIGURACIÓN DE PESAJE CON JABAS DINÁMICAS ==========
+    def mostrar_nivel_pesaje(self):
+        self.limpiar_contenido()
+        self.lbl_titulo.configure(text="⚖️ CONFIGURACIÓN DE TARAS POR JABAS")
+        
+        # Asegurar que la tabla existe con la estructura correcta
+        # Eliminar tabla antigua si tiene estructura incorrecta y recrearla
+        try:
+            # Verificar si la columna 'num_jabas' existe
+            ejecutar_consulta("SELECT num_jabas FROM configuracion_taras LIMIT 1", fetchone=True)
+        except Exception:
+            # Si no existe, eliminar la tabla y recrearla
+            ejecutar_consulta("DROP TABLE IF EXISTS configuracion_taras")
+            ejecutar_consulta("""
+                CREATE TABLE configuracion_taras (
+                    id SERIAL PRIMARY KEY,
+                    num_jabas INTEGER NOT NULL UNIQUE,
+                    peso_tara DECIMAL(10,2) NOT NULL
+                )
+            """)
+        
+        # Botón de regreso
+        back_btn = ctk.CTkButton(self.scroll_frame, text="◀ Volver a Catálogos",
+                                 command=self.mostrar_nivel_recepcion,
+                                 width=180, height=35, fg_color="#3a6ea5")
+        back_btn.pack(anchor="w", pady=(0, 10))
+        crear_tooltip(back_btn, "Regresar a la pantalla principal de catálogos")
+        
+        # Frame principal
+        main_frame = ctk.CTkFrame(self.scroll_frame, fg_color="transparent")
+        main_frame.pack(fill="both", expand=True)
+        
+        # Tarjeta de configuración
+        card = ctk.CTkFrame(main_frame, corner_radius=15, border_width=1,
+                            border_color="#2e8b57", fg_color=("#f0f0f0", "#2a2a2a"))
+        card.pack(pady=20, padx=20, fill="x")
+        ctk.CTkLabel(card, text="⚙️ Peso total de tara por cantidad de jabas", font=("Arial", 18, "bold"),
+                     text_color="#2e8b57").pack(anchor="w", padx=20, pady=(15, 5))
+        ctk.CTkLabel(card, text="Configura el peso total de las jabas vacías (tara) para cada cantidad de jabas.",
+                     font=("Arial", 12), text_color="gray").pack(anchor="w", padx=20, pady=(0, 10))
+        
+        # Sección de peso unitario
+        auto_frame = ctk.CTkFrame(card, fg_color="transparent")
+        auto_frame.pack(fill="x", padx=20, pady=(5, 10))
+        
+        ctk.CTkLabel(auto_frame, text="Peso por jaba (kg):", font=("Arial", 12, "bold")).grid(row=0, column=0, padx=5, pady=5, sticky="e")
+        self.peso_unitario_entry = ctk.CTkEntry(auto_frame, width=120)
+        self.peso_unitario_entry.grid(row=0, column=1, padx=5, pady=5)
+        crear_tooltip(self.peso_unitario_entry, "Peso de una jaba vacía. Al hacer clic en 'Aplicar a todas' se multiplicará y actualizará las taras.")
+        
+        self.btn_obtener_peso = ctk.CTkButton(auto_frame, text="⚖️ Obtener de báscula", command=self.obtener_peso_unitario_bascula, width=150)
+        self.btn_obtener_peso.grid(row=0, column=2, padx=5, pady=5)
+        crear_tooltip(self.btn_obtener_peso, "Conectar a la báscula y leer el peso actual (de una jaba vacía)")
+        
+        self.btn_aplicar = ctk.CTkButton(auto_frame, text="📐 Aplicar a todas", command=self.aplicar_peso_unitario, width=130, fg_color="#2e8b57")
+        self.btn_aplicar.grid(row=0, column=3, padx=5, pady=5)
+        crear_tooltip(self.btn_aplicar, "Multiplicar el peso ingresado por el número de jabas y actualizar los campos")
+        
+        self.btn_default = ctk.CTkButton(auto_frame, text="🔄 Restablecer", command=self.restablecer_valores_defecto, width=120, fg_color="#3a6ea5")
+        self.btn_default.grid(row=0, column=4, padx=5, pady=5)
+        crear_tooltip(self.btn_default, "Restablecer valores por defecto (1 a 7 jabas con 5.0 kg cada una)")
+        
+        # Frame para lista dinámica de jabas
+        jabas_frame = ctk.CTkFrame(card, fg_color="transparent")
+        jabas_frame.pack(fill="both", expand=True, padx=20, pady=10)
+        
+        # Barra de herramientas
+        toolbar_jabas = ctk.CTkFrame(jabas_frame, fg_color="transparent")
+        toolbar_jabas.pack(fill="x", pady=5)
+        btn_agregar = ctk.CTkButton(toolbar_jabas, text="➕ Agregar jaba", command=self.agregar_fila_jaba, width=120)
+        btn_agregar.pack(side="left", padx=5)
+        crear_tooltip(btn_agregar, "Añadir una nueva fila para configurar el peso de más jabas")
+        btn_eliminar = ctk.CTkButton(toolbar_jabas, text="❌ Eliminar última", command=self.eliminar_ultima_fila_jaba, width=120, fg_color="#8b0000")
+        btn_eliminar.pack(side="left", padx=5)
+        crear_tooltip(btn_eliminar, "Eliminar la última fila de la lista")
+        
+        # Scrollable frame para las filas
+        self.jabas_scroll = ctk.CTkScrollableFrame(jabas_frame, fg_color="transparent", height=300)
+        self.jabas_scroll.pack(fill="both", expand=True, pady=5)
+        
+        self.filas_jabas = []
+        self.cargar_taras_desde_bd()
+        
+        # ========== BOTÓN GUARDAR - SIEMPRE VISIBLE ==========
+        botones_frame = ctk.CTkFrame(card, fg_color="transparent")
+        botones_frame.pack(fill="x", pady=15, padx=20)
+        
+        self.btn_guardar = ctk.CTkButton(botones_frame, text="💾 GUARDAR CONFIGURACIÓN", command=self.guardar_configuracion_taras,
+                                         fg_color="#2e8b57", hover_color="#1e6b47",
+                                         width=280, height=50, font=("Arial", 16, "bold"))
+        self.btn_guardar.pack(pady=5)
+        crear_tooltip(self.btn_guardar, "Guardar los pesos de tara en la base de datos")
+        
+        # Label de estado
+        self.lbl_status = ctk.CTkLabel(card, text="", font=("Arial", 11))
+        self.lbl_status.pack(pady=(0, 15))
+        
+        self.update_idletasks()
+
+    def cargar_taras_desde_bd(self):
+        for fila in self.filas_jabas:
+            fila['frame'].destroy()
+        self.filas_jabas.clear()
+        
+        resultados = ejecutar_consulta("SELECT num_jabas, peso_tara FROM configuracion_taras ORDER BY num_jabas", fetchall=True)
+        if not resultados:
+            for i in range(1, 8):
+                self.agregar_fila_jaba(i, 5.0)
+        else:
+            for num, peso in resultados:
+                self.agregar_fila_jaba(num, peso)
+    
+    def agregar_fila_jaba(self, num_jabas=None, peso=5.0):
+        if num_jabas is None:
+            if self.filas_jabas:
+                ultimo = max(f['num_jabas'] for f in self.filas_jabas)
+                num_jabas = ultimo + 1
+            else:
+                num_jabas = 1
+        
+        frame_fila = ctk.CTkFrame(self.jabas_scroll, fg_color="transparent", corner_radius=8)
+        frame_fila.pack(fill="x", pady=2, padx=5)
+        
+        lbl = ctk.CTkLabel(frame_fila, text=f"{num_jabas} jaba{'s' if num_jabas > 1 else ''}:", width=100, anchor="e")
+        lbl.pack(side="left", padx=5)
+        entry = ctk.CTkEntry(frame_fila, width=100)
+        entry.insert(0, f"{peso:.2f}")
+        entry.pack(side="left", padx=5)
+        crear_tooltip(entry, f"Peso total de tara para {num_jabas} jaba{'s' if num_jabas > 1 else ''} (kg)")
+        
+        btn_del = ctk.CTkButton(frame_fila, text="✖", width=30, command=lambda f=frame_fila: self.eliminar_fila_individual(f))
+        btn_del.pack(side="left", padx=5)
+        crear_tooltip(btn_del, "Eliminar esta configuración de jabas")
+        
+        self.filas_jabas.append({'frame': frame_fila, 'num_jabas': num_jabas, 'entry': entry})
+        self.filas_jabas.sort(key=lambda x: x['num_jabas'])
+        self.reordenar_filas()
+    
+    def eliminar_fila_individual(self, frame):
+        for i, fila in enumerate(self.filas_jabas):
+            if fila['frame'] == frame:
+                fila['frame'].destroy()
+                del self.filas_jabas[i]
+                break
+        if self.lbl_status:
+            self.lbl_status.configure(text="Fila eliminada. Guarde los cambios.", text_color="orange")
+    
+    def eliminar_ultima_fila_jaba(self):
+        if self.filas_jabas:
+            ultima = self.filas_jabas[-1]
+            ultima['frame'].destroy()
+            self.filas_jabas.pop()
+            if self.lbl_status:
+                self.lbl_status.configure(text="Última fila eliminada. Guarde los cambios.", text_color="orange")
+        else:
+            messagebox.showinfo("Sin filas", "No hay filas para eliminar.")
+    
+    def reordenar_filas(self):
+        for fila in self.filas_jabas:
+            fila['frame'].pack_forget()
+        for fila in self.filas_jabas:
+            fila['frame'].pack(fill="x", pady=2, padx=5)
+        for fila in self.filas_jabas:
+            num = fila['num_jabas']
+            lbl_text = f"{num} jaba{'s' if num > 1 else ''}:"
+            for child in fila['frame'].winfo_children():
+                if isinstance(child, ctk.CTkLabel):
+                    child.configure(text=lbl_text)
+                    break
+    
+    def aplicar_peso_unitario(self):
+        try:
+            base = float(self.peso_unitario_entry.get())
+            if base < 0:
+                raise ValueError
+            for fila in self.filas_jabas:
+                num = fila['num_jabas']
+                valor = base * num
+                fila['entry'].delete(0, "end")
+                fila['entry'].insert(0, f"{valor:.2f}")
+            if self.lbl_status:
+                self.lbl_status.configure(text="✅ Pesos actualizados desde el valor unitario", text_color="green")
+        except ValueError:
+            if self.lbl_status:
+                self.lbl_status.configure(text="❌ Ingrese un número válido y positivo", text_color="red")
+            messagebox.showerror("Error", "El peso por jaba debe ser un número positivo.")
+    
+    def restablecer_valores_defecto(self):
+        for fila in self.filas_jabas:
+            fila['frame'].destroy()
+        self.filas_jabas.clear()
+        for i in range(1, 8):
+            self.agregar_fila_jaba(i, 5.0)
+        self.peso_unitario_entry.delete(0, "end")
+        self.peso_unitario_entry.insert(0, "5.0")
+        if self.lbl_status:
+            self.lbl_status.configure(text="🔄 Valores restablecidos a 5.0 kg (1 a 7 jabas)", text_color="orange")
+    
+    def obtener_peso_unitario_bascula(self):
+        bascula = Bascula()
+        try:
+            if not bascula.conexion or not bascula.conexion.is_open:
+                exito, msg = bascula.conectar()
+                if not exito:
+                    messagebox.showerror("Error", f"No se pudo conectar: {msg}")
+                    return
+            peso, _ = bascula.leer_peso()
+            if peso is None or peso == 0:
+                messagebox.showwarning("Sin lectura", "No se detectó peso o es cero.")
+                return
+            self.peso_unitario_entry.delete(0, "end")
+            self.peso_unitario_entry.insert(0, f"{peso:.2f}")
+            if messagebox.askyesno("Aplicar automáticamente", "¿Aplicar a todas las jabas?"):
+                self.aplicar_peso_unitario()
+        except Exception as e:
+            messagebox.showerror("Error", f"No se pudo leer: {str(e)}")
+        finally:
+            bascula.desconectar()
+    
+    def guardar_configuracion_taras(self):
+        try:
+            ejecutar_consulta("DELETE FROM configuracion_taras")
+            for fila in self.filas_jabas:
+                num = fila['num_jabas']
+                peso = float(fila['entry'].get())
+                if peso < 0:
+                    raise ValueError(f"Peso negativo para {num} jabas")
+                ejecutar_consulta("INSERT INTO configuracion_taras (num_jabas, peso_tara) VALUES (%s, %s)", (num, peso))
+            if self.lbl_status:
+                self.lbl_status.configure(text="✅ Configuración guardada correctamente", text_color="green")
+            # Recargar las filas desde BD para confirmar
+            self.cargar_taras_desde_bd()
+            return True
+        except ValueError as e:
+            if self.lbl_status:
+                self.lbl_status.configure(text=f"❌ Error: {str(e)}", text_color="red")
+            messagebox.showerror("Error", str(e))
+            return False
+        except Exception as e:
+            if self.lbl_status:
+                self.lbl_status.configure(text=f"❌ Error: {str(e)}", text_color="red")
+            messagebox.showerror("Error", f"No se pudo guardar: {str(e)}")
+            return False
+    
+    # ==================== CATÁLOGOS DE RECEPCIÓN ====================
     def mostrar_nivel_catalogos(self):
         self.limpiar_contenido()
         self.lbl_titulo.configure(text="📦 CATÁLOGOS DE RECEPCIÓN")
@@ -497,7 +755,7 @@ class VentanaCatalogos(ctk.CTkFrame):
         btn_cancelar.pack(side="left", padx=10)
         crear_tooltip(btn_cancelar, "Cancelar y cerrar")
 
-    # ==================== VARIEDADES (no tiene FK directa, pero se deja igual) ====================
+    # ==================== VARIEDADES ====================
     def gestion_variedades(self):
         self._abrir_ventana_gestion("variedades", self._crear_ventana_variedades)
 
@@ -555,9 +813,8 @@ class VentanaCatalogos(ctk.CTkFrame):
             messagebox.showinfo("Eliminado", "Variedad eliminada correctamente")
             self._cargar_variedades_tree(tree)
         except Exception as e:
-            # No hay FK esperada, pero manejamos igual
             if "viola la llave foránea" in str(e) or "foreign key constraint" in str(e):
-                messagebox.showerror("No se puede eliminar", "Esta variedad está siendo utilizada en recepciones (campo variedad).")
+                messagebox.showerror("No se puede eliminar", "Esta variedad está siendo utilizada en recepciones.")
             else:
                 messagebox.showerror("Error", f"No se pudo eliminar: {e}")
         self._enfocar_ventana(parent_ventana)
@@ -1212,3 +1469,6 @@ class VentanaCatalogos(ctk.CTkFrame):
         btn_cancelar = ctk.CTkButton(btn_frame, text="Cancelar", command=modal.destroy, width=100, fg_color="#8b0000")
         btn_cancelar.pack(side="left", padx=10)
         crear_tooltip(btn_cancelar, "Cancelar y cerrar")
+
+if __name__ == "__main__":
+    pass

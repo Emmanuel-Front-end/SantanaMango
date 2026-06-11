@@ -15,7 +15,10 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from cryptography.fernet import Fernet
 from config import cargar_config, guardar_config
-from auth import cifrar_contrasena
+from auth import cifrar_contrasena, guardar_sesion_segura, generar_token, cargar_sesion
+from dotenv import load_dotenv
+
+load_dotenv()  # Cargar variables de entorno desde .env
 
 try:
     from menu_principal import abrir_menu_principal
@@ -27,11 +30,11 @@ except ImportError:
 RECORDAR_FILE = "recordar_usuario.json"
 CODIGO_2FA_FILE = "codigo_2fa_temp.json"
 
-# Configuración SMTP
-SMTP_SERVER = "smtp.gmail.com"
-SMTP_PORT = 587
-SMTP_USER = "Jesusemmanuelfrontend@gmail.com"
-SMTP_PASSWORD = "Sandoval1989"
+# Configuración SMTP desde variables de entorno
+SMTP_SERVER = os.getenv("SMTP_SERVER", "smtp.gmail.com")
+SMTP_PORT = int(os.getenv("SMTP_PORT", 587))
+SMTP_USER = os.getenv("SMTP_USER", "")
+SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
 
 # ==================== FUNCIONES AUXILIARES ====================
 def generar_clave():
@@ -341,7 +344,7 @@ class LoginWindow(ctk.CTk):
             try:
                 logo_image = Image.open(logo_path)
                 logo_image = logo_image.resize((120, 120), Image.Resampling.LANCZOS)
-                logo_ctk = ctk.CTkImage(light_image=logo_image, dark_image=logo_image, size=(120, 120))
+                logo_ctk = ctk.CTkImage(light_image=logo_image, dark_image=logo_image, size=(250, 120))
                 logo_label = ctk.CTkLabel(self.card, image=logo_ctk, text="")
                 logo_label.pack(pady=(30, 5))
             except Exception as e:
@@ -711,7 +714,7 @@ class LoginWindow(ctk.CTk):
             usuario_id = resultado[0]
             rol = resultado[1]
             email = resultado[2] if tiene_email and len(resultado) > 2 else None
-            if email and not self.codigo_2fa_enviado and SMTP_USER != "tu_correo@gmail.com":
+            if email and not self.codigo_2fa_enviado and SMTP_USER != "":
                 self.enviar_codigo_2fa(email)
                 self._mostrar_2fa()
                 self.status_label.configure(text="Ingrese el código enviado a su correo")
@@ -751,13 +754,10 @@ class LoginWindow(ctk.CTk):
             usuario_id, usuario, rol, password = self._credenciales_temp
             delattr(self, '_credenciales_temp')
         try:
-            from auth import guardar_sesion_segura, generar_token
             token = generar_token()
             guardar_sesion_segura(usuario_id, usuario, rol, token)
         except Exception as e:
             print(f"Error guardando sesión segura: {e}")
-        with open("session_user.txt", "w") as f:
-            f.write(f"{usuario}|{rol}")
         if self.remember_var.get():
             guardar_recordar(usuario, True)
         try:

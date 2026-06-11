@@ -258,7 +258,3 @@ class WidgetBascula(ctk.CTkFrame):
             return float(self.label_peso.cget("text"))
         except:
             return 0.0
-
-
-
-            
